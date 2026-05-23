@@ -24,7 +24,9 @@ pub struct AudioNode {
 pub struct PortInfo {
     pub id: u32,
     pub node_id: u32,
+    #[allow(dead_code)]
     pub name: String,
+    #[allow(dead_code)]
     pub direction: PortDirection,
 }
 
@@ -39,7 +41,9 @@ pub struct LinkInfo {
     pub id: u32,
     pub output_node: u32,
     pub input_node: u32,
+    #[allow(dead_code)]
     pub output_port: u32,
+    #[allow(dead_code)]
     pub input_port: u32,
 }
 
@@ -80,12 +84,6 @@ impl MixerState {
             .collect()
     }
 
-    pub fn is_linked(&self, from_node: u32, to_node: u32) -> bool {
-        self.links.values().any(|l| {
-            l.output_node == from_node && l.input_node == to_node
-        })
-    }
-
     pub fn find_links(&self, from_node: u32, to_node: u32) -> Vec<u32> {
         self.links
             .values()
@@ -93,42 +91,12 @@ impl MixerState {
             .map(|l| l.id)
             .collect()
     }
-
-    pub fn get_node_links(&self, node_id: u32) -> Vec<&LinkInfo> {
-        self.links
-            .values()
-            .filter(|l| l.output_node == node_id || l.input_node == node_id)
-            .collect()
-    }
-
-    pub fn get_output_ports(&self, node_id: u32) -> Vec<&PortInfo> {
-        self.node_ports
-            .get(&node_id)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| self.ports.get(id))
-                    .filter(|p| matches!(p.direction, PortDirection::Output))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    pub fn get_input_ports(&self, node_id: u32) -> Vec<&PortInfo> {
-        self.node_ports
-            .get(&node_id)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| self.ports.get(id))
-                    .filter(|p| matches!(p.direction, PortDirection::Input))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Clone)]
 pub enum EngineEvent {
     NodeAdded(AudioNode),
+    #[allow(dead_code)]
     NodeChanged(AudioNode),
     NodeRemoved(u32),
     PortAdded(PortInfo),
@@ -146,5 +114,6 @@ pub enum EngineCommand {
     CreateLink { from_node: u32, to_node: u32 },
     RemoveLinks { link_ids: Vec<u32> },
     LoadNullSink { name: String },
+    #[allow(dead_code)]
     UnloadModule { module_id: u32 },
 }

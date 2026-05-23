@@ -37,11 +37,12 @@ fn main() {
                 WindowOptions {
                     titlebar: Some(TitlebarOptions {
                         title: Some("MusicMixer".into()),
+                        appears_transparent: false,
                         ..Default::default()
                     }),
                     window_bounds: Some(gpui::WindowBounds::Windowed(Bounds::centered(
                         None,
-                        size(px(960.), px(680.)),
+                        size(px(1100.), px(720.)),
                         cx,
                     ))),
                     ..Default::default()
