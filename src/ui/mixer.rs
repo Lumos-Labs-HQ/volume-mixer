@@ -135,10 +135,7 @@ impl Render for MixerWindow {
                         ))
                     })
                     .when(!app_inputs.is_empty(), |d| {
-                        d.child(render_section(
-                            "[M] App Inputs", PURPLE, &app_inputs, &out_list, &out_names,
-                            &node_data, &link_map, open_dd, cx,
-                        ))
+                        d.child(render_simple_section("[M] App Inputs", PURPLE, &app_inputs, &node_data, cx))
                     })
                     .when(!inputs.is_empty(), |d| {
                         d.child(render_simple_section("[@] Input Devices", BLUE, &inputs, &node_data, cx))

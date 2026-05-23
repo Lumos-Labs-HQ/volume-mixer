@@ -88,14 +88,23 @@ fn run_monitor_thread(
 
                             let node_type = classify_node(&media_class, &node_name);
 
-                            let pulse_id = props
+                            let pulse_id: Option<u32> = props
                                 .as_ref()
                                 .and_then(|m| m.get("object.serial").and_then(|s| s.parse().ok()));
+
+                            // For stream nodes, get the real app binary name from pactl
+                            let display_name = if matches!(node_type, NodeType::App | NodeType::AppInput) {
+                                pulse_id
+                                    .and_then(|pid| pactl_binary_name(pid))
+                                    .unwrap_or_else(|| description.clone())
+                            } else {
+                                description.clone()
+                            };
 
                             let event = EngineEvent::NodeAdded(AudioNode {
                                 id,
                                 name: node_name,
-                                description,
+                                description: display_name,
                                 node_type,
                                 volume: 1.0,
                                 muted: false,
@@ -236,15 +245,10 @@ fn run_command_thread(cmd_rx: Receiver<EngineCommand>, event_tx: Sender<EngineEv
                 let _ = event_tx.send(EngineEvent::MuteChanged { node_id, muted });
             }
             EngineCommand::CreateLink { from_name, to_name } => {
-                // pw-link connects all matching FL/FR ports between two nodes by name pattern
-                let _ = Command::new("pw-link")
-                    .args([&format!("{from_name}:*"), &format!("{to_name}:*")])
-                    .output();
+                link_nodes(&from_name, &to_name, false);
             }
             EngineCommand::RemoveLink { from_name, to_name } => {
-                let _ = Command::new("pw-link")
-                    .args(["-d", &format!("{from_name}:*"), &format!("{to_name}:*")])
-                    .output();
+                link_nodes(&from_name, &to_name, true);
             }
             EngineCommand::LoadNullSink { name } => {
                 let _ = Command::new("pw-cli")
@@ -293,4 +297,90 @@ fn reset_all_mutes() {
             let _ = Command::new("pactl").args(["set-sink-input-volume", id_str, "100%"]).output();
         }
     }
+}
+
+/// Look up the real process binary name for a stream node via pactl.
+/// pactl's "Sink Input #N" index matches the node's object.serial (pulse_id).
+/// Falls back to None if not found (e.g. source-outputs use different list).
+fn pactl_binary_name(pulse_id: u32) -> Option<String> {
+    // Try sink-inputs first (playback), then source-outputs (capture)
+    for list_type in &["sink-inputs", "source-outputs"] {
+        let out = Command::new("pactl").args(["list", list_type]).output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut in_block = false;
+        let mut binary: Option<String> = None;
+        for line in text.lines() {
+            let t = line.trim();
+            // "Sink Input #856" or "Source Output #868"
+            if t.contains(&format!("#{pulse_id}")) {
+                in_block = true;
+                binary = None;
+            } else if in_block {
+                if t.starts_with("application.process.binary = ") {
+                    binary = t.split('"').nth(1).map(|s| s.to_string());
+                } else if t.starts_with("application.name = ") && binary.is_none() {
+                    binary = t.split('"').nth(1).map(|s| s.to_string());
+                }
+                // Next block starts
+                if (t.starts_with("Sink Input #") || t.starts_with("Source Output #")) && !t.contains(&format!("#{pulse_id}")) {
+                    break;
+                }
+            }
+        }
+        if binary.is_some() {
+            return binary;
+        }
+    }
+    None
+}
+
+/// Link or unlink all output ports of `from_node` to all input ports of `to_node`.
+/// Uses `pw-link -o` / `pw-link -i` to enumerate real port names, then pairs them.
+fn link_nodes(from_name: &str, to_name: &str, disconnect: bool) {
+    let out_ports = pw_ports_for(from_name, "output");
+    let in_ports  = pw_ports_for(to_name,   "input");
+    if out_ports.is_empty() || in_ports.is_empty() { return; }
+
+    // Pair by channel suffix (FL↔FL, FR↔FR, MONO↔anything), or round-robin
+    for out_port in &out_ports {
+        let suffix = channel_suffix(out_port);
+        let target = in_ports.iter()
+            .find(|p| channel_suffix(p) == suffix)
+            .or_else(|| in_ports.first())
+            .unwrap();
+        let mut args = vec![];
+        if disconnect { args.push("-d"); }
+        args.push(out_port.as_str());
+        args.push(target.as_str());
+        let _ = Command::new("pw-link").args(&args).output();
+    }
+    // Also connect each in_port that didn't get matched (e.g. stereo sink ← mono source)
+    if out_ports.len() == 1 {
+        for in_port in in_ports.iter().skip(1) {
+            let mut args = vec![];
+            if disconnect { args.push("-d"); }
+            args.push(out_ports[0].as_str());
+            args.push(in_port.as_str());
+            let _ = Command::new("pw-link").args(&args).output();
+        }
+    }
+}
+
+fn pw_ports_for(node_name: &str, direction: &str) -> Vec<String> {
+    let flag = if direction == "output" { "-o" } else { "-i" };
+    let out = match Command::new("pw-link").args([flag]).output() {
+        Ok(o) => o,
+        Err(_) => return vec![],
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.starts_with(&format!("{node_name}:")))
+        // exclude monitor ports
+        .filter(|l| !l.contains(":monitor_"))
+        .map(|l| l.to_string())
+        .collect()
+}
+
+fn channel_suffix(port: &str) -> &str {
+    port.rsplit('_').next().unwrap_or("")
 }
