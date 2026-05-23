@@ -1,5 +1,6 @@
 use gpui::{
-    App, Application, Bounds, TitlebarOptions, WindowOptions, prelude::*, px, size,
+    App, Application, Bounds, TitlebarOptions, WindowDecorations, WindowOptions, prelude::*, px,
+    size,
 };
 use std::sync::{Arc, Mutex};
 
@@ -31,19 +32,22 @@ fn main() {
 
         cx.set_global(mixer_global);
 
-        // Open window
+        // Open window with client-side decorations so we can draw our own
+        // titlebar with close/minimize buttons and custom resize handles.
         let window = cx
             .open_window(
                 WindowOptions {
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("MusicMixer".into()),
-                        ..Default::default()
-                    }),
+                    window_decorations: Some(WindowDecorations::Client),
                     window_bounds: Some(gpui::WindowBounds::Windowed(Bounds::centered(
                         None,
                         size(px(1100.), px(720.)),
                         cx,
                     ))),
+                    window_min_size: Some(size(px(600.), px(400.))),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("MusicMixer".into()),
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 },
                 |_window, cx| {
