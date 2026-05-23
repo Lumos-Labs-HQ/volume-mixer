@@ -6,25 +6,16 @@ use crate::models::{EngineCommand, EngineEvent};
 use crate::state::MixerGlobal;
 
 pub struct MixerWindow {
-    virtual_bus_counter: u32,
     open_dropdown: Option<u32>,
 }
 
 impl MixerWindow {
     pub fn new() -> Self {
-        MixerWindow { virtual_bus_counter: 0, open_dropdown: None }
+        MixerWindow { open_dropdown: None }
     }
 
-    fn on_add_bus(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.virtual_bus_counter += 1;
-        let name = format!("MusicMixer-Bus-{}", self.virtual_bus_counter);
-        if let Some(g) = cx.try_global::<MixerGlobal>() {
-            let _ = g.cmd_tx.send(EngineCommand::LoadNullSink { name });
-        }
-        cx.notify();
-    }
-
-    fn poll_events(&mut self, cx: &mut Context<Self>) {
+    #[allow(dead_code)]
+    fn on_add_bus(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}    fn poll_events(&mut self, cx: &mut Context<Self>) {
         let events: Vec<EngineEvent> = cx.try_global::<MixerGlobal>()
             .map(|g| { let mut v = vec![]; while let Ok(e) = g.event_rx.try_recv() { v.push(e); } v })
             .unwrap_or_default();
@@ -81,7 +72,7 @@ impl Render for MixerWindow {
         _window.request_animation_frame();
 
         // snapshot everything we need before building the tree
-        let (playback, app_inputs, inputs, outputs, out_list) =
+        let (playback, app_inputs, inputs, outputs, out_list, out_names) =
             if let Some(g) = cx.try_global::<MixerGlobal>() {
                 let s = g.state.lock().unwrap();
                 let mut pb: Vec<u32> = s.playback_apps().iter().map(|n| n.id).collect();
@@ -91,17 +82,25 @@ impl Render for MixerWindow {
                 pb.sort(); ai.sort(); id.sort(); od.sort();
                 let ol: Vec<(u32, String)> = s.output_devices()
                     .iter().map(|n| (n.id, clip(&n.description, 22))).collect();
-                (pb, ai, id, od, ol)
-            } else { (vec![], vec![], vec![], vec![], vec![]) };
+                // raw node.name for pw-link commands: out_id -> node.name
+                let on: std::collections::HashMap<u32, String> = s.output_devices()
+                    .iter().map(|n| (n.id, n.name.clone())).collect();
+                (pb, ai, id, od, ol, on)
+            } else { (vec![], vec![], vec![], vec![], vec![], Default::default()) };
 
         // snapshot node data for all ids we'll render
+        // (name, description, volume, muted, pulse_id, is_stream)
         let all_ids: Vec<u32> = playback.iter().chain(app_inputs.iter())
             .chain(inputs.iter()).chain(outputs.iter()).copied().collect();
-        let node_data: std::collections::HashMap<u32, (String, String, f32, bool)> =
+        let node_data: std::collections::HashMap<u32, (String, String, f32, bool, Option<u32>, bool)> =
             if let Some(g) = cx.try_global::<MixerGlobal>() {
                 let s = g.state.lock().unwrap();
                 all_ids.iter().filter_map(|&id| {
-                    s.nodes.get(&id).map(|n| (id, (n.name.clone(), n.description.clone(), n.volume, n.muted)))
+                    s.nodes.get(&id).map(|n| {
+                        let is_stream = matches!(n.node_type,
+                            crate::models::NodeType::App | crate::models::NodeType::AppInput);
+                        (id, (n.name.clone(), n.description.clone(), n.volume, n.muted, n.pulse_id, is_stream))
+                    })
                 }).collect()
             } else { Default::default() };
 
@@ -119,41 +118,6 @@ impl Render for MixerWindow {
             .flex_col()
             .bg(rgb(BG))
             .text_color(rgb(TEXT))
-            // ── top bar (draggable) ───────────────────────────────────
-            .child(
-                div()
-                    .h(px(48.))
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .px(px(20.))
-                    .bg(rgb(SURFACE))
-                    .border_b_1()
-                    .border_color(rgb(BORDER))
-                    .id("titlebar")
-                    .on_mouse_down(gpui::MouseButton::Left, |_, window, _cx| {
-                        window.start_window_move();
-                    })
-                    .child(
-                        div()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_size(px(15.))
-                            .child("MusicMixer"),
-                    )
-                    .child(
-                        div()
-                            .px(px(14.)).py(px(6.))
-                            .rounded_md()
-                            .bg(rgb(BLUE))
-                            .text_color(rgb(0xffffff))
-                            .text_size(px(12.))
-                            .cursor_pointer()
-                            .child("+ Add Bus")
-                            .id("add-bus-btn")
-                            .on_click(cx.listener(|this, _, w, cx| this.on_add_bus(w, cx))),
-                    ),
-            )
             // ── body ─────────────────────────────────────────────────────
             .child(
                 div()
@@ -166,13 +130,13 @@ impl Render for MixerWindow {
                     .gap(px(28.))
                     .when(!playback.is_empty(), |d| {
                         d.child(render_section(
-                            "[>] Playback Apps", GREEN, &playback, &out_list,
+                            "[>] Playback Apps", GREEN, &playback, &out_list, &out_names,
                             &node_data, &link_map, open_dd, cx,
                         ))
                     })
                     .when(!app_inputs.is_empty(), |d| {
                         d.child(render_section(
-                            "[M] App Inputs", PURPLE, &app_inputs, &out_list,
+                            "[M] App Inputs", PURPLE, &app_inputs, &out_list, &out_names,
                             &node_data, &link_map, open_dd, cx,
                         ))
                     })
@@ -199,22 +163,23 @@ fn render_section(
     color: u32,
     ids: &[u32],
     out_list: &[(u32, String)],
-    node_data: &std::collections::HashMap<u32, (String, String, f32, bool)>,
+    out_names: &std::collections::HashMap<u32, String>,
+    node_data: &std::collections::HashMap<u32, (String, String, f32, bool, Option<u32>, bool)>,
     link_map: &[(u32, u32)],
     open_dd: Option<u32>,
     cx: &mut Context<MixerWindow>,
 ) -> impl IntoElement {
     let mut row = div().flex().flex_row().flex_wrap().gap(px(12.));
     for &node_id in ids {
-        let (name, desc, volume, muted) = node_data.get(&node_id)
-            .cloned().unwrap_or_else(|| (format!("Node {node_id}"), String::new(), 1.0, false));
+        let (name, desc, volume, muted, pulse_id, is_stream) = node_data.get(&node_id)
+            .cloned().unwrap_or_else(|| (format!("Node {node_id}"), String::new(), 1.0, false, None, true));
         let linked_outs: Vec<u32> = out_list.iter()
             .filter(|(oid, _)| link_map.iter().any(|(f, t)| *f == node_id && *t == *oid))
             .map(|(oid, _)| *oid).collect();
         let available: Vec<(u32, String)> = out_list.iter()
             .filter(|(oid, _)| !linked_outs.contains(oid)).cloned().collect();
-        let card = routable_card(node_id, name, desc, volume, muted,
-            &linked_outs, out_list, &available, open_dd == Some(node_id), cx);
+        let card = routable_card(node_id, name, desc, volume, muted, pulse_id, is_stream,
+            &linked_outs, out_list, out_names, &available, open_dd == Some(node_id), cx);
         row = row.child(card);
     }
     div().flex().flex_col().gap(px(10.))
@@ -226,14 +191,14 @@ fn render_simple_section(
     title: &str,
     color: u32,
     ids: &[u32],
-    node_data: &std::collections::HashMap<u32, (String, String, f32, bool)>,
+    node_data: &std::collections::HashMap<u32, (String, String, f32, bool, Option<u32>, bool)>,
     cx: &mut Context<MixerWindow>,
 ) -> impl IntoElement {
     let mut row = div().flex().flex_row().flex_wrap().gap(px(12.));
     for &node_id in ids {
-        let (name, desc, volume, muted) = node_data.get(&node_id)
-            .cloned().unwrap_or_else(|| (format!("Node {node_id}"), String::new(), 1.0, false));
-        row = row.child(simple_card(node_id, name, desc, volume, muted, cx));
+        let (name, desc, volume, muted, pulse_id, is_stream) = node_data.get(&node_id)
+            .cloned().unwrap_or_else(|| (format!("Node {node_id}"), String::new(), 1.0, false, None, false));
+        row = row.child(simple_card(node_id, name, desc, volume, muted, pulse_id, is_stream, cx));
     }
     div().flex().flex_col().gap(px(10.))
         .child(section_label(title, color))
@@ -259,8 +224,11 @@ fn routable_card(
     desc: String,
     volume: f32,
     muted: bool,
+    pulse_id: Option<u32>,
+    is_stream: bool,
     linked_outs: &[u32],
     all_outputs: &[(u32, String)],
+    out_names: &std::collections::HashMap<u32, String>,
     available: &[(u32, String)],
     dd_open: bool,
     cx: &mut Context<MixerWindow>,
@@ -268,11 +236,15 @@ fn routable_card(
     let all_out = all_outputs.to_vec();
     let avail = available.to_vec();
     let linked = linked_outs.to_vec();
+    // map out_id -> raw node.name for pw-link
+    let out_name_map: std::collections::HashMap<u32, String> = out_names.clone();
 
     // route pills
     let pills: Vec<_> = linked.iter().map(|&out_id| {
         let label = all_out.iter().find(|(id, _)| *id == out_id)
             .map(|(_, n)| n.clone()).unwrap_or_else(|| format!("{out_id}"));
+        let from_name = name.clone();
+        let to_name = out_name_map.get(&out_id).cloned().unwrap_or_default();
         div()
             .flex().items_center().gap(px(4.))
             .px(px(7.)).py(px(2.))
@@ -287,21 +259,21 @@ fn routable_card(
                     .child("x")
                     .id(SharedString::from(format!("unroute-{node_id}-{out_id}")))
                     .on_click(move |_, _, cx: &mut App| {
-                        let ids = cx.try_global::<MixerGlobal>()
-                            .map(|g| g.state.lock().unwrap().find_links(node_id, out_id))
-                            .unwrap_or_default();
                         if let Some(g) = cx.try_global::<MixerGlobal>() {
-                            if !ids.is_empty() {
-                                let _ = g.cmd_tx.send(EngineCommand::RemoveLinks { link_ids: ids });
-                            }
+                            let _ = g.cmd_tx.send(EngineCommand::RemoveLink {
+                                from_name: from_name.clone(),
+                                to_name: to_name.clone(),
+                            });
                         }
                     }),
             )
     }).collect();
 
-    // dropdown items
+    // dropdown items — use cx.listener so we can close the dropdown on select
     let dd_items: Vec<_> = avail.iter().map(|(out_id, out_name)| {
         let out_id = *out_id;
+        let from_name = name.clone();
+        let to_name = out_name_map.get(&out_id).cloned().unwrap_or_default();
         div()
             .px(px(12.)).py(px(7.))
             .cursor_pointer()
@@ -309,11 +281,16 @@ fn routable_card(
             .hover(|s| s.bg(rgb(0x2d3148)))
             .child(SharedString::from(out_name.clone()))
             .id(SharedString::from(format!("dd-item-{node_id}-{out_id}")))
-            .on_click(move |_, _, cx: &mut App| {
+            .on_click(cx.listener(move |this, _, _, cx| {
                 if let Some(g) = cx.try_global::<MixerGlobal>() {
-                    let _ = g.cmd_tx.send(EngineCommand::CreateLink { from_node: node_id, to_node: out_id });
+                    let _ = g.cmd_tx.send(EngineCommand::CreateLink {
+                        from_name: from_name.clone(),
+                        to_name: to_name.clone(),
+                    });
                 }
-            })
+                this.open_dropdown = None;
+                cx.notify();
+            }))
     }).collect();
 
     let has_avail = !avail.is_empty();
@@ -322,7 +299,7 @@ fn routable_card(
         .w(px(220.)).flex().flex_col()
         .bg(rgb(CARD)).border_1().border_color(rgb(BORDER)).rounded_lg().overflow_hidden()
         .child(card_header(&name, &desc))
-        .child(vol_controls(node_id, volume, muted, cx))
+        .child(vol_controls(node_id, name.clone(), volume, muted, pulse_id, is_stream, cx))
         // routing
         .child(
             div().px(px(10.)).pb(px(10.)).flex().flex_col().gap(px(6.))
@@ -363,13 +340,15 @@ fn simple_card(
     desc: String,
     volume: f32,
     muted: bool,
+    pulse_id: Option<u32>,
+    is_stream: bool,
     cx: &mut Context<MixerWindow>,
 ) -> impl IntoElement {
     div()
         .w(px(200.)).flex().flex_col()
         .bg(rgb(CARD)).border_1().border_color(rgb(BORDER)).rounded_lg().overflow_hidden()
         .child(card_header(&name, &desc))
-        .child(vol_controls(node_id, volume, muted, cx))
+        .child(vol_controls(node_id, name, volume, muted, pulse_id, is_stream, cx))
 }
 
 fn card_header(name: &str, desc: &str) -> impl IntoElement {
@@ -390,13 +369,19 @@ fn card_header(name: &str, desc: &str) -> impl IntoElement {
 
 fn vol_controls(
     node_id: u32,
+    node_name: String,
     volume: f32,
     muted: bool,
+    #[allow(unused_variables)]
+    pulse_id: Option<u32>,
+    is_stream: bool,
     _cx: &mut Context<MixerWindow>,
 ) -> impl IntoElement {
     let mute_bg = if muted { RED } else { 0x374151u32 };
     let vol_pct = (volume * 100.0).round() as u32;
     let bar_w = px(140.0 * volume);
+    let nn1 = node_name.clone();
+    let nn2 = node_name.clone();
 
     div().px(px(10.)).pb(px(10.)).flex().flex_col().gap(px(6.))
         // mute + percent
@@ -410,11 +395,15 @@ fn vol_controls(
                         .child(if muted { "Unmute" } else { "Mute" })
                         .id(SharedString::from(format!("mute-{node_id}")))
                         .on_click(move |_, _, cx: &mut App| {
-                            let new_muted = cx.try_global::<MixerGlobal>()
-                                .and_then(|g| g.state.lock().unwrap().nodes.get(&node_id).map(|n| !n.muted))
-                                .unwrap_or(false);
+                            let (new_muted, pid) = cx.try_global::<MixerGlobal>()
+                                .and_then(|g| g.state.lock().unwrap().nodes.get(&node_id)
+                                    .map(|n| (!n.muted, n.pulse_id)))
+                                .unwrap_or((false, None));
                             if let Some(g) = cx.try_global::<MixerGlobal>() {
-                                let _ = g.cmd_tx.send(EngineCommand::SetMute { node_id, muted: new_muted });
+                                let _ = g.cmd_tx.send(EngineCommand::SetMute {
+                                    node_id, muted: new_muted,
+                                    pulse_id: pid, node_name: nn1.clone(), is_stream,
+                                });
                             }
                         }),
                 )
@@ -430,11 +419,15 @@ fn vol_controls(
                         .cursor_pointer().child("-")
                         .id(SharedString::from(format!("vd-{node_id}")))
                         .on_click(move |_, _, cx: &mut App| {
-                            let v = cx.try_global::<MixerGlobal>()
-                                .and_then(|g| g.state.lock().unwrap().nodes.get(&node_id).map(|n| (n.volume - 0.1).max(0.0)))
-                                .unwrap_or(0.0);
+                            let (v, pid) = cx.try_global::<MixerGlobal>()
+                                .and_then(|g| g.state.lock().unwrap().nodes.get(&node_id)
+                                    .map(|n| ((n.volume - 0.1).max(0.0), n.pulse_id)))
+                                .unwrap_or((0.0, None));
                             if let Some(g) = cx.try_global::<MixerGlobal>() {
-                                let _ = g.cmd_tx.send(EngineCommand::SetVolume { node_id, volume: v });
+                                let _ = g.cmd_tx.send(EngineCommand::SetVolume {
+                                    node_id, volume: v,
+                                    pulse_id: pid, node_name: nn2.clone(), is_stream,
+                                });
                             }
                         }),
                 )
@@ -449,11 +442,15 @@ fn vol_controls(
                         .cursor_pointer().child("+")
                         .id(SharedString::from(format!("vu-{node_id}")))
                         .on_click(move |_, _, cx: &mut App| {
-                            let v = cx.try_global::<MixerGlobal>()
-                                .and_then(|g| g.state.lock().unwrap().nodes.get(&node_id).map(|n| (n.volume + 0.1).min(1.0)))
-                                .unwrap_or(1.0);
+                            let (v, pid) = cx.try_global::<MixerGlobal>()
+                                .and_then(|g| g.state.lock().unwrap().nodes.get(&node_id)
+                                    .map(|n| ((n.volume + 0.1).min(1.0), n.pulse_id)))
+                                .unwrap_or((1.0, None));
                             if let Some(g) = cx.try_global::<MixerGlobal>() {
-                                let _ = g.cmd_tx.send(EngineCommand::SetVolume { node_id, volume: v });
+                                let _ = g.cmd_tx.send(EngineCommand::SetVolume {
+                                    node_id, volume: v,
+                                    pulse_id: pid, node_name: node_name.clone(), is_stream,
+                                });
                             }
                         }),
                 ),

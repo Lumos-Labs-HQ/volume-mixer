@@ -18,6 +18,7 @@ pub struct AudioNode {
     pub node_type: NodeType,
     pub volume: f32,   // 0.0 - 1.0
     pub muted: bool,
+    pub pulse_id: Option<u32>, // object.serial — matches pactl sink-input/source-output index
 }
 
 #[derive(Debug, Clone)]
@@ -83,14 +84,6 @@ impl MixerState {
             .filter(|n| matches!(n.node_type, NodeType::AppInput))
             .collect()
     }
-
-    pub fn find_links(&self, from_node: u32, to_node: u32) -> Vec<u32> {
-        self.links
-            .values()
-            .filter(|l| l.output_node == from_node && l.input_node == to_node)
-            .map(|l| l.id)
-            .collect()
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -109,10 +102,12 @@ pub enum EngineEvent {
 
 #[derive(Debug, Clone)]
 pub enum EngineCommand {
-    SetVolume { node_id: u32, volume: f32 },
-    SetMute { node_id: u32, muted: bool },
-    CreateLink { from_node: u32, to_node: u32 },
-    RemoveLinks { link_ids: Vec<u32> },
+    /// volume 0.0-1.0; pulse_id = object.serial for streams, None for devices (use node_name)
+    SetVolume { node_id: u32, volume: f32, pulse_id: Option<u32>, node_name: String, is_stream: bool },
+    SetMute   { node_id: u32, muted: bool, pulse_id: Option<u32>, node_name: String, is_stream: bool },
+    CreateLink { from_name: String, to_name: String },
+    RemoveLink { from_name: String, to_name: String },
+    #[allow(dead_code)]
     LoadNullSink { name: String },
     #[allow(dead_code)]
     UnloadModule { module_id: u32 },

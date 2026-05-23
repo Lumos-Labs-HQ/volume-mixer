@@ -88,6 +88,10 @@ fn run_monitor_thread(
 
                             let node_type = classify_node(&media_class, &node_name);
 
+                            let pulse_id = props
+                                .as_ref()
+                                .and_then(|m| m.get("object.serial").and_then(|s| s.parse().ok()));
+
                             let event = EngineEvent::NodeAdded(AudioNode {
                                 id,
                                 name: node_name,
@@ -95,6 +99,7 @@ fn run_monitor_thread(
                                 node_type,
                                 volume: 1.0,
                                 muted: false,
+                                pulse_id,
                             });
                             let _ = event_tx.send(event);
                         }
@@ -194,38 +199,52 @@ fn run_monitor_thread(
 fn run_command_thread(cmd_rx: Receiver<EngineCommand>, event_tx: Sender<EngineEvent>) {
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
-            EngineCommand::SetVolume { node_id, volume } => {
-                let _ = Command::new("pw-cli")
-                    .args([
-                        "set-param",
-                        &format!("{node_id}"),
-                        "Props",
-                        &format!("{{ channelVolumes: [ {volume:.3} ] }}"),
-                    ])
-                    .output();
-                let _ = event_tx.send(EngineEvent::VolumeChanged { node_id, volume });
-            }
-            EngineCommand::SetMute { node_id, muted } => {
-                let mute_str = if muted { "true" } else { "false" };
-                let _ = Command::new("pw-cli")
-                    .args([
-                        "set-param",
-                        &format!("{node_id}"),
-                        "Props",
-                        &format!("{{ mute: {mute_str} }}"),
-                    ])
-                    .output();
-                let _ = event_tx.send(EngineEvent::MuteChanged { node_id, muted });
-            }
-            EngineCommand::CreateLink { from_node, to_node } => {
-                create_link_pw_cli(from_node, to_node);
-            }
-            EngineCommand::RemoveLinks { link_ids } => {
-                for link_id in link_ids {
-                    let _ = Command::new("pw-cli")
-                        .args(["destroy", &format!("{link_id}")])
+            EngineCommand::SetVolume { node_id, volume, pulse_id, node_name, is_stream } => {
+                let pct = format!("{}%", (volume * 100.0).round() as u32);
+                if is_stream {
+                    if let Some(pid) = pulse_id {
+                        let _ = Command::new("pactl")
+                            .args(["set-sink-input-volume", &pid.to_string(), &pct])
+                            .output();
+                    }
+                } else {
+                    let _ = Command::new("pactl")
+                        .args(["set-sink-volume", &node_name, &pct])
+                        .output();
+                    let _ = Command::new("pactl")
+                        .args(["set-source-volume", &node_name, &pct])
                         .output();
                 }
+                let _ = event_tx.send(EngineEvent::VolumeChanged { node_id, volume });
+            }
+            EngineCommand::SetMute { node_id, muted, pulse_id, node_name, is_stream } => {
+                let val = if muted { "1" } else { "0" };
+                if is_stream {
+                    if let Some(pid) = pulse_id {
+                        let _ = Command::new("pactl")
+                            .args(["set-sink-input-mute", &pid.to_string(), val])
+                            .output();
+                    }
+                } else {
+                    let _ = Command::new("pactl")
+                        .args(["set-sink-mute", &node_name, val])
+                        .output();
+                    let _ = Command::new("pactl")
+                        .args(["set-source-mute", &node_name, val])
+                        .output();
+                }
+                let _ = event_tx.send(EngineEvent::MuteChanged { node_id, muted });
+            }
+            EngineCommand::CreateLink { from_name, to_name } => {
+                // pw-link connects all matching FL/FR ports between two nodes by name pattern
+                let _ = Command::new("pw-link")
+                    .args([&format!("{from_name}:*"), &format!("{to_name}:*")])
+                    .output();
+            }
+            EngineCommand::RemoveLink { from_name, to_name } => {
+                let _ = Command::new("pw-link")
+                    .args(["-d", &format!("{from_name}:*"), &format!("{to_name}:*")])
+                    .output();
             }
             EngineCommand::LoadNullSink { name } => {
                 let _ = Command::new("pw-cli")
@@ -246,106 +265,6 @@ fn run_command_thread(cmd_rx: Receiver<EngineCommand>, event_tx: Sender<EngineEv
     }
 }
 
-fn create_link_pw_cli(from_node: u32, to_node: u32) {
-    let output = match Command::new("pw-cli").args(["ls", "Port"]).output() {
-        Ok(o) => o,
-        Err(_) => return,
-    };
-
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut ports: Vec<(u32, u32, String, String)> = vec![]; // id, node_id, direction, name
-    let mut current_id = None;
-
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("id ") {
-            if let Some(id_str) = trimmed.split_whitespace().nth(1) {
-                current_id = id_str.trim_end_matches(',').parse().ok();
-            }
-        } else if let Some(id) = current_id {
-            if trimmed.starts_with("node.id = ") {
-                if let Some(val) = trimmed.split("= \"").nth(1) {
-                    if let Ok(node_id) = val.trim_end_matches('"').parse::<u32>() {
-                        if node_id == from_node || node_id == to_node {
-                            ports.push((id, node_id, String::new(), String::new()));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Second pass: get directions
-    let mut current_id2: Option<u32> = None;
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("id ") {
-            if let Some(id_str) = trimmed.split_whitespace().nth(1) {
-                current_id2 = id_str.trim_end_matches(',').parse().ok();
-            }
-        } else if let Some(id) = current_id2 {
-            if trimmed.starts_with("port.direction = ") {
-                if let Some(dir) = trimmed.split("= \"").nth(1) {
-                    let dir = dir.trim_end_matches('"');
-                    if let Some(p) = ports.iter_mut().find(|p| p.0 == id) {
-                        p.2 = dir.to_string();
-                    }
-                }
-            }
-            if trimmed.starts_with("port.name = ") {
-                if let Some(name) = trimmed.split("= \"").nth(1) {
-                    let name = name.trim_end_matches('"');
-                    if let Some(p) = ports.iter_mut().find(|p| p.0 == id) {
-                        p.3 = name.to_string();
-                    }
-                }
-            }
-        }
-    }
-
-    let out_ports: Vec<_> = ports
-        .iter()
-        .filter(|p| p.1 == from_node && p.2 == "out")
-        .collect();
-    let in_ports: Vec<_> = ports
-        .iter()
-        .filter(|p| p.1 == to_node && p.2 == "in")
-        .collect();
-
-    // Pair up ports by matching channel names (e.g., FL with FL, FR with FR)
-    for out_port in &out_ports {
-        let matching_in = in_ports.iter().find(|in_port| {
-            out_port.3 == in_port.3
-                || (out_port.3.contains("FL") && in_port.3.contains("FL"))
-                || (out_port.3.contains("FR") && in_port.3.contains("FR"))
-                || (out_port.3.contains("MONO") && in_port.3.contains("MONO"))
-        });
-
-        if let Some(in_port) = matching_in {
-            let _ = Command::new("pw-cli")
-                .args([
-                    "create-link",
-                    &format!("{}", from_node),
-                    &format!("{}", to_node),
-                    &format!("{}", out_port.0),
-                    &format!("{}", in_port.0),
-                ])
-                .output();
-        } else if in_ports.len() == 1 {
-            // If only one input port, connect everything to it (mixdown)
-            let _ = Command::new("pw-cli")
-                .args([
-                    "create-link",
-                    &format!("{}", from_node),
-                    &format!("{}", to_node),
-                    &format!("{}", out_port.0),
-                    &format!("{}", in_ports[0].0),
-                ])
-                .output();
-        }
-    }
-}
-
 fn classify_node(media_class: &str, node_name: &str) -> NodeType {
     match media_class {
         "Audio/Sink" => NodeType::OutputDevice,
@@ -362,50 +281,16 @@ fn classify_node(media_class: &str, node_name: &str) -> NodeType {
     }
 }
 
-/// On startup, find all stream/app nodes and unmute them + restore volume to 1.0.
-/// This recovers from a previous crash that left nodes muted.
+/// On startup, unmute all sink-inputs and restore volume to 100%.
 fn reset_all_mutes() {
-    let output = match Command::new("pw-cli").args(["ls", "Node"]).output() {
+    let output = match Command::new("pactl").args(["list", "short", "sink-inputs"]).output() {
         Ok(o) => o,
         Err(_) => return,
     };
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut current_id: Option<u32> = None;
-    let mut current_class = String::new();
-
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("id ") {
-            if let Some(id_str) = trimmed.split_whitespace().nth(1) {
-                current_id = id_str.trim_end_matches(',').parse().ok();
-                current_class.clear();
-            }
-        } else if trimmed.starts_with("media.class = ") {
-            if let Some(val) = trimmed.split("= \"").nth(1) {
-                current_class = val.trim_end_matches('"').to_string();
-            }
-        } else if trimmed.starts_with("node.name = ") {
-            // Once we have both id and class, reset if it's an app stream
-            if let Some(id) = current_id {
-                let is_stream = matches!(
-                    current_class.as_str(),
-                    "Stream/Output/Audio" | "Stream/Input/Audio"
-                );
-                if is_stream {
-                    let _ = Command::new("pw-cli")
-                        .args([
-                            "set-param", &format!("{id}"), "Props",
-                            "{ mute: false }",
-                        ])
-                        .output();
-                    let _ = Command::new("pw-cli")
-                        .args([
-                            "set-param", &format!("{id}"), "Props",
-                            "{ channelVolumes: [ 1.000 ] }",
-                        ])
-                        .output();
-                }
-            }
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Some(id_str) = line.split_whitespace().next() {
+            let _ = Command::new("pactl").args(["set-sink-input-mute", id_str, "0"]).output();
+            let _ = Command::new("pactl").args(["set-sink-input-volume", id_str, "100%"]).output();
         }
     }
 }
