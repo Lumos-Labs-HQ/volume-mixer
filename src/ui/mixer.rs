@@ -54,38 +54,83 @@ impl MixerWindow {
     }
 }
 
-// ── palette ──────────────────────────────────────────────────────────────────
-const BG: u32          = 0x0b0d12;
-const SURFACE: u32     = 0x13161f;
-const CARD: u32        = 0x181b25;
-const CARD_HOVER: u32  = 0x1e2230;
-const BORDER: u32      = 0x232736;
-const BORDER_HOVER: u32 = 0x2d3144;
-const TEXT: u32        = 0xe8eaf0;
-const TEXT_MUTED: u32  = 0x7a8199;
-const TEXT_DIM: u32    = 0x525766;
-const GREEN: u32       = 0x34d399;
-const BLUE: u32        = 0x60a5fa;
-const AMBER: u32       = 0xfbbf24;
-const PURPLE: u32      = 0xa78bfa;
-const RED: u32         = 0xf87171;
-const RED_BG: u32      = 0x3d1f1f;
-const GREEN_BG: u32    = 0x1a2e26;
-const SLIDER_TRACK: u32 = 0x2a2e3d;
-const SLIDER_THUMB: u32 = 0xeef0f5;
-const BTN_BG: u32      = 0x252a3a;
-const BTN_BG_HOVER: u32 = 0x2d3144;
-const ROUTE_BG: u32    = 0x1e2d4a;
-const ROUTE_BORDER: u32 = 0x3b82f6;
-const ROUTE_TEXT: u32  = 0x93c5fd;
-const TITLEBAR_H: f32  = 40.;
+// ═══════════════════════════════════════════════════════════════════════════════
+//  DESIGN SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Backgrounds ───────────────────────────────────────────────────────────────
+const BG: u32             = 0x08090e;
+const BG_ELEVATED: u32    = 0x0e1018;
+const SURFACE: u32        = 0x13151f;
+const CARD: u32           = 0x161924;
+const CARD_HOVER: u32     = 0x1c1f2d;
+const OVERLAY: u32        = 0x1e2130;
+
+// ── Borders ───────────────────────────────────────────────────────────────────
+const BORDER: u32         = 0x1e2130;
+const BORDER_HOVER: u32   = 0x2a2e42;
+const DIVIDER: u32        = 0x181b28;
+
+// ── Text ──────────────────────────────────────────────────────────────────────
+const TEXT_PRIMARY: u32   = 0xeef0f5;
+const TEXT_SECONDARY: u32 = 0x8b90a5;
+const TEXT_TERTIARY: u32  = 0x5a6075;
+
+// ── Accents ───────────────────────────────────────────────────────────────────
+const GREEN: u32          = 0x4ade80;
+const GREEN_DIM: u32      = 0x1a2e26;
+const BLUE: u32           = 0x60a5fa;
+const BLUE_DIM: u32       = 0x1e2d4a;
+const AMBER: u32          = 0xfbbf24;
+const AMBER_DIM: u32      = 0x2d2510;
+const PURPLE: u32         = 0xc084fc;
+const PURPLE_DIM: u32     = 0x2a1f3a;
+const RED: u32            = 0xf87171;
+const RED_DIM: u32        = 0x3d1f24;
+
+// ── Component tokens ──────────────────────────────────────────────────────────
+const BTN_BG: u32         = 0x1e2232;
+const BTN_BG_HOVER: u32   = 0x272b3d;
+const SLIDER_TRACK: u32   = 0x252a3a;
+const SLIDER_THUMB: u32   = 0xffffff;
+const PILL_BG: u32        = 0x1a2340;
+const PILL_BORDER: u32    = 0x2d3a66;
+const ROUTE_TEXT: u32     = 0x93c5fd;
+const TITLEBAR_H: f32     = 42.;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ICONS  (monochrome Unicode glyphs — not emojis)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+fn ico_container(color: u32, symbol: &str) -> impl IntoElement {
+    let dim = ((color & 0xFEFEFE) >> 1) | 0x080808;
+    div()
+        .w(px(20.)).h(px(20.))
+        .flex().items_center().justify_center()
+        .rounded_sm()
+        .bg(rgb(dim))
+        .child(
+            div().text_color(rgb(color)).text_size(px(10.))
+                .font_weight(gpui::FontWeight::BOLD)
+                .child(SharedString::from(symbol.to_string()))
+        )
+}
+
+fn ico_play(color: u32) -> impl IntoElement { ico_container(color, "▶") }
+fn ico_circle(color: u32) -> impl IntoElement { ico_container(color, "●") }
+fn ico_half_circle(color: u32) -> impl IntoElement { ico_container(color, "◐") }
+fn ico_bullseye(color: u32) -> impl IntoElement { ico_container(color, "◉") }
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  RENDER
+// ═══════════════════════════════════════════════════════════════════════════════
 
 impl Render for MixerWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.poll_events(cx);
         _window.request_animation_frame();
 
-        // snapshot everything we need before building the tree
         let (playback, app_inputs, inputs, outputs, out_list, out_names) =
             if let Some(g) = cx.try_global::<MixerGlobal>() {
                 let s = g.state.lock().unwrap();
@@ -95,7 +140,7 @@ impl Render for MixerWindow {
                 let mut od: Vec<u32> = s.output_devices().iter().map(|n| n.id).collect();
                 pb.sort(); ai.sort(); id.sort(); od.sort();
                 let ol: Vec<(u32, String)> = s.output_devices()
-                    .iter().map(|n| (n.id, clip(&n.description, 22))).collect();
+                    .iter().map(|n| (n.id, clip(&n.description, 24))).collect();
                 let on: std::collections::HashMap<u32, String> = s.output_devices()
                     .iter().map(|n| (n.id, n.name.clone())).collect();
                 (pb, ai, id, od, ol, on)
@@ -127,7 +172,7 @@ impl Render for MixerWindow {
             .relative()
             .flex().flex_col()
             .bg(rgb(BG))
-            .text_color(rgb(TEXT))
+            .text_color(rgb(TEXT_PRIMARY))
             // ── custom titlebar ─────────────────────────────────────────
             .child(titlebar(_window, cx))
             // ── body ────────────────────────────────────────────────────
@@ -136,32 +181,57 @@ impl Render for MixerWindow {
                     .flex_1()
                     .id("body-scroll")
                     .overflow_y_scroll()
-                    .p(px(24.))
+                    .px(px(32.)).py(px(28.))
                     .flex()
                     .flex_col()
-                    .gap(px(32.))
+                    .gap(px(40.))
                     .when(!playback.is_empty(), |d| {
                         d.child(render_section(
-                            "Playback Apps", "▶", GREEN, &playback, &out_list, &out_names,
+                            "Playback", ico_play(GREEN), GREEN, GREEN_DIM,
+                            &playback, &out_list, &out_names,
                             &node_data, &link_map, open_dd, cx,
                         ))
                     })
                     .when(!app_inputs.is_empty(), |d| {
-                        d.child(render_simple_section("App Inputs", "⏺", PURPLE, &app_inputs, &node_data, cx))
+                        d.child(render_simple_section(
+                            "App Inputs", ico_circle(PURPLE), PURPLE, PURPLE_DIM,
+                            &app_inputs, &node_data, cx
+                        ))
                     })
                     .when(!inputs.is_empty(), |d| {
-                        d.child(render_simple_section("Input Devices", "🎙", BLUE, &inputs, &node_data, cx))
+                        d.child(render_simple_section(
+                            "Input Devices", ico_half_circle(BLUE), BLUE, BLUE_DIM,
+                            &inputs, &node_data, cx
+                        ))
                     })
                     .when(!outputs.is_empty(), |d| {
-                        d.child(render_simple_section("Output Devices", "🔈", AMBER, &outputs, &node_data, cx))
+                        d.child(render_simple_section(
+                            "Output Devices", ico_bullseye(AMBER), AMBER, AMBER_DIM,
+                            &outputs, &node_data, cx
+                        ))
                     })
                     .when(
                         playback.is_empty() && app_inputs.is_empty()
                             && inputs.is_empty() && outputs.is_empty(),
-                        |d| d.flex().items_center().justify_center().child(
-                            div().flex().flex_col().items_center().gap(px(12.))
-                                .child(div().text_size(px(28.)).text_color(rgb(TEXT_DIM)).child("♪"))
-                                .child(div().text_color(rgb(TEXT_DIM)).text_size(px(13.)).child("Waiting for PipeWire…")),
+                        |d| d.flex().items_center().justify_center().h_full().child(
+                            div().flex().flex_col().items_center().gap(px(20.))
+                                .child(
+                                    div().w(px(56.)).h(px(56.))
+                                        .flex().items_center().justify_center()
+                                        .rounded_full()
+                                        .bg(rgb(BG_ELEVATED))
+                                        .border_1().border_color(rgb(BORDER))
+                                        .child(div().text_size(px(24.)).text_color(rgb(TEXT_TERTIARY)).child("◉"))
+                                )
+                                .child(
+                                    div().text_color(rgb(TEXT_SECONDARY)).text_size(px(14.))
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .child("Waiting for PipeWire…")
+                                )
+                                .child(
+                                    div().text_color(rgb(TEXT_TERTIARY)).text_size(px(12.))
+                                        .child("Audio nodes will appear here automatically")
+                                ),
                         ),
                     ),
             )
@@ -169,7 +239,7 @@ impl Render for MixerWindow {
             .child(
                 div()
                     .absolute().right_0().top_0().bottom_0()
-                    .w(px(4.))
+                    .w(px(5.))
                     .cursor_ew_resize()
                     .on_mouse_down(MouseButton::Left, |_, window, _| {
                         window.start_window_resize(ResizeEdge::Right);
@@ -178,7 +248,7 @@ impl Render for MixerWindow {
             .child(
                 div()
                     .absolute().left_0().right_0().bottom_0()
-                    .h(px(4.))
+                    .h(px(5.))
                     .cursor_ns_resize()
                     .on_mouse_down(MouseButton::Left, |_, window, _| {
                         window.start_window_resize(ResizeEdge::Bottom);
@@ -187,7 +257,7 @@ impl Render for MixerWindow {
             .child(
                 div()
                     .absolute().right_0().bottom_0()
-                    .w(px(10.)).h(px(10.))
+                    .w(px(12.)).h(px(12.))
                     .cursor_nwse_resize()
                     .on_mouse_down(MouseButton::Left, |_, window, _| {
                         window.start_window_resize(ResizeEdge::BottomRight);
@@ -196,17 +266,21 @@ impl Render for MixerWindow {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TITLEBAR
+// ═══════════════════════════════════════════════════════════════════════════════
+
 fn titlebar(_window: &mut Window, _cx: &mut Context<MixerWindow>) -> impl IntoElement {
     div()
         .h(px(TITLEBAR_H))
-        .px(px(16.))
+        .px(px(18.))
         .flex().items_center().justify_between()
-        .border_b_1().border_color(rgb(BORDER))
-        .bg(rgb(SURFACE))
+        .border_b_1().border_color(rgb(DIVIDER))
+        .bg(rgb(BG_ELEVATED))
         // draggable region (left / center)
         .child(
             div()
-                .flex().items_center().gap(px(10.))
+                .flex().items_center().gap(px(12.))
                 .flex_1()
                 .h_full()
                 .on_mouse_down(MouseButton::Left, |_, window, _| {
@@ -214,34 +288,48 @@ fn titlebar(_window: &mut Window, _cx: &mut Context<MixerWindow>) -> impl IntoEl
                 })
                 .child(
                     div()
-                        .w(px(24.)).h(px(24.))
+                        .w(px(26.)).h(px(26.))
                         .flex().items_center().justify_center()
-                        .rounded_sm()
-                        .bg(rgb(GREEN_BG))
-                        .text_color(rgb(GREEN))
-                        .text_size(px(12.))
-                        .child("♪")
+                        .rounded_md()
+                        .bg(rgb(GREEN_DIM))
+                        .border_1().border_color(rgb(0x1a3a2a))
+                        .child(
+                            div().text_color(rgb(GREEN)).text_size(px(12.))
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .child("◉")
+                        )
                 )
                 .child(
                     div()
-                        .text_color(rgb(TEXT))
+                        .text_color(rgb(TEXT_PRIMARY))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_size(px(13.))
                         .child("MusicMixer")
+                )
+                .child(
+                    div()
+                        .px(px(6.)).py(px(2.))
+                        .rounded_sm()
+                        .bg(rgb(SURFACE))
+                        .border_1().border_color(rgb(BORDER))
+                        .text_color(rgb(TEXT_TERTIARY))
+                        .text_size(px(9.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .child("v0.1")
                 ),
         )
         // window controls (right)
         .child(
-            div().flex().items_center().gap(px(8.))
+            div().flex().items_center().gap(px(6.))
                 .child(
                     div()
-                        .w(px(28.)).h(px(28.))
+                        .w(px(30.)).h(px(30.))
                         .flex().items_center().justify_center()
                         .rounded_sm()
-                        .text_color(rgb(TEXT_MUTED))
-                        .text_size(px(14.))
+                        .text_color(rgb(TEXT_SECONDARY))
+                        .text_size(px(16.))
                         .cursor_pointer()
-                        .hover(|s| s.bg(rgb(BTN_BG)).text_color(rgb(TEXT)))
+                        .hover(|s| s.bg(rgb(BTN_BG)).text_color(rgb(TEXT_PRIMARY)))
                         .child("−")
                         .id("titlebar-minimize")
                         .on_click(|_, window, _| {
@@ -250,13 +338,13 @@ fn titlebar(_window: &mut Window, _cx: &mut Context<MixerWindow>) -> impl IntoEl
                 )
                 .child(
                     div()
-                        .w(px(28.)).h(px(28.))
+                        .w(px(30.)).h(px(30.))
                         .flex().items_center().justify_center()
                         .rounded_sm()
-                        .text_color(rgb(TEXT_MUTED))
-                        .text_size(px(14.))
+                        .text_color(rgb(TEXT_SECONDARY))
+                        .text_size(px(16.))
                         .cursor_pointer()
-                        .hover(|s| s.bg(rgb(RED_BG)).text_color(rgb(RED)))
+                        .hover(|s| s.bg(rgb(RED_DIM)).text_color(rgb(RED)))
                         .child("×")
                         .id("titlebar-close")
                         .on_click(|_, window, _| {
@@ -266,11 +354,15 @@ fn titlebar(_window: &mut Window, _cx: &mut Context<MixerWindow>) -> impl IntoEl
         )
 }
 
-// ── Section with routing ──────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SECTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
 fn render_section(
     title: &str,
-    icon: &str,
+    icon: impl IntoElement,
     color: u32,
+    _dim: u32,
     ids: &[u32],
     out_list: &[(u32, String)],
     out_names: &std::collections::HashMap<u32, String>,
@@ -279,7 +371,8 @@ fn render_section(
     open_dd: Option<u32>,
     cx: &mut Context<MixerWindow>,
 ) -> impl IntoElement {
-    let mut row = div().flex().flex_row().flex_wrap().gap(px(14.));
+    let count = ids.len();
+    let mut row = div().flex().flex_row().flex_wrap().gap(px(16.));
     for &node_id in ids {
         let (name, desc, volume, muted, pulse_id, is_stream) = node_data.get(&node_id)
             .cloned().unwrap_or_else(|| (format!("Node {node_id}"), String::new(), 1.0, false, None, true));
@@ -289,40 +382,38 @@ fn render_section(
         let available: Vec<(u32, String)> = out_list.iter()
             .filter(|(oid, _)| !linked_outs.contains(oid)).cloned().collect();
         let card = routable_card(node_id, name, desc, volume, muted, pulse_id, is_stream,
-            &linked_outs, out_list, out_names, &available, open_dd == Some(node_id), cx);
+            color, &linked_outs, out_list, out_names, &available, open_dd == Some(node_id), cx);
         row = row.child(card);
     }
-    div().flex().flex_col().gap(px(12.))
-        .child(section_label(title, icon, color))
+    div().flex().flex_col().gap(px(16.))
+        .child(section_header(title, icon, color, count))
         .child(row)
 }
 
 fn render_simple_section(
     title: &str,
-    icon: &str,
+    icon: impl IntoElement,
     color: u32,
+    _dim: u32,
     ids: &[u32],
     node_data: &std::collections::HashMap<u32, (String, String, f32, bool, Option<u32>, bool)>,
     cx: &mut Context<MixerWindow>,
 ) -> impl IntoElement {
-    let mut row = div().flex().flex_row().flex_wrap().gap(px(14.));
+    let count = ids.len();
+    let mut row = div().flex().flex_row().flex_wrap().gap(px(16.));
     for &node_id in ids {
         let (name, desc, volume, muted, pulse_id, is_stream) = node_data.get(&node_id)
             .cloned().unwrap_or_else(|| (format!("Node {node_id}"), String::new(), 1.0, false, None, false));
-        row = row.child(simple_card(node_id, name, desc, volume, muted, pulse_id, is_stream, cx));
+        row = row.child(simple_card(node_id, name, desc, volume, muted, pulse_id, is_stream, color, cx));
     }
-    div().flex().flex_col().gap(px(12.))
-        .child(section_label(title, icon, color))
+    div().flex().flex_col().gap(px(16.))
+        .child(section_header(title, icon, color, count))
         .child(row)
 }
 
-fn section_label(title: &str, icon: &str, color: u32) -> impl IntoElement {
+fn section_header(title: &str, icon: impl IntoElement, color: u32, count: usize) -> impl IntoElement {
     div().flex().items_center().gap(px(10.))
-        .child(
-            div()
-                .w(px(8.)).h(px(8.)).rounded_full()
-                .bg(rgb(color)),
-        )
+        .child(icon)
         .child(
             div()
                 .text_color(rgb(color))
@@ -332,13 +423,21 @@ fn section_label(title: &str, icon: &str, color: u32) -> impl IntoElement {
         )
         .child(
             div()
-                .text_color(rgb(TEXT_DIM))
-                .text_size(px(11.))
-                .child(SharedString::from(icon.to_string())),
+                .px(px(6.)).py(px(2.))
+                .rounded_md()
+                .bg(rgb(BG_ELEVATED))
+                .border_1().border_color(rgb(BORDER))
+                .text_color(rgb(TEXT_TERTIARY))
+                .text_size(px(10.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(format!("{count}")),
         )
 }
 
-// ── Routable card ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CARDS
+// ═══════════════════════════════════════════════════════════════════════════════
+
 fn routable_card(
     node_id: u32,
     name: String,
@@ -347,6 +446,7 @@ fn routable_card(
     muted: bool,
     pulse_id: Option<u32>,
     is_stream: bool,
+    color: u32,
     linked_outs: &[u32],
     all_outputs: &[(u32, String)],
     out_names: &std::collections::HashMap<u32, String>,
@@ -359,7 +459,6 @@ fn routable_card(
     let linked = linked_outs.to_vec();
     let out_name_map: std::collections::HashMap<u32, String> = out_names.clone();
 
-    // route pills
     let pills: Vec<_> = linked.iter().map(|&out_id| {
         let label = all_out.iter().find(|(id, _)| *id == out_id)
             .map(|(_, n)| n.clone()).unwrap_or_else(|| format!("{out_id}"));
@@ -367,20 +466,24 @@ fn routable_card(
         let to_name = out_name_map.get(&out_id).cloned().unwrap_or_default();
         div()
             .flex().items_center().gap(px(5.))
-            .px(px(8.)).py(px(3.))
-            .rounded_sm()
-            .bg(rgb(ROUTE_BG))
-            .border_1().border_color(rgb(ROUTE_BORDER))
-            .child(div().text_color(rgb(ROUTE_TEXT)).text_size(px(10.))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .child(SharedString::from(label)))
+            .h(px(26.))
+            .px(px(9.))
+            .rounded_md()
+            .bg(rgb(PILL_BG))
+            .border_1().border_color(rgb(PILL_BORDER))
+            .child(
+                div().text_color(rgb(ROUTE_TEXT)).text_size(px(11.))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .child(SharedString::from(label))
+            )
             .child(
                 div()
-                    .w(px(14.)).h(px(14.))
+                    .w(px(16.)).h(px(16.))
                     .flex().items_center().justify_center()
                     .rounded_sm()
                     .hover(|s| s.bg(rgb(0x2d3a5f)))
-                    .text_color(rgb(ROUTE_TEXT)).text_size(px(10.)).cursor_pointer()
+                    .text_color(rgb(ROUTE_TEXT)).text_size(px(11.))
+                    .cursor_pointer()
                     .child("×")
                     .id(SharedString::from(format!("unroute-{node_id}-{out_id}")))
                     .on_click(move |_, _, cx: &mut App| {
@@ -399,9 +502,9 @@ fn routable_card(
         let from_name = name.clone();
         let to_name = out_name_map.get(&out_id).cloned().unwrap_or_default();
         div()
-            .px(px(12.)).py(px(7.))
+            .px(px(12.)).py(px(8.))
             .cursor_pointer()
-            .text_color(rgb(TEXT)).text_size(px(12.))
+            .text_color(rgb(TEXT_PRIMARY)).text_size(px(12.))
             .hover(|s| s.bg(rgb(0x252a3a)))
             .child(SharedString::from(out_name.clone()))
             .id(SharedString::from(format!("dd-item-{node_id}-{out_id}")))
@@ -420,26 +523,32 @@ fn routable_card(
     let has_avail = !avail.is_empty();
 
     div()
-        .w(px(260.)).flex().flex_col()
+        .w(px(280.)).flex().flex_col()
         .bg(rgb(CARD)).border_1().border_color(rgb(BORDER)).rounded_md()
+        .overflow_hidden()
+        .child(div().h(px(2.)).w_full().bg(rgb(color)))
         .hover(|s| s.border_color(rgb(BORDER_HOVER)).bg(rgb(CARD_HOVER)))
         .child(card_header(&name, &desc))
-        .child(vol_controls(node_id, name.clone(), volume, muted, pulse_id, is_stream, cx))
-        // routing
+        .child(vol_controls(node_id, name.clone(), volume, muted, pulse_id, is_stream, color, cx))
         .child(
-            div().px(px(14.)).pb(px(14.)).pt(px(4.)).flex().flex_col().gap(px(8.))
+            div().px(px(16.)).pb(px(16.)).pt(px(4.)).flex().flex_col().gap(px(10.))
                 .child(
-                    div().text_color(rgb(TEXT_DIM)).text_size(px(9.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("OUTPUT ROUTING"),
+                    div().flex().items_center().gap(px(6.))
+                        .child(div().w(px(3.)).h(px(3.)).rounded_full().bg(rgb(TEXT_TERTIARY)))
+                        .child(
+                            div().text_color(rgb(TEXT_TERTIARY)).text_size(px(9.))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child("OUTPUT ROUTING"),
+                        ),
                 )
-                .child(div().flex().flex_row().flex_wrap().gap(px(5.)).children(pills))
+                .child(div().flex().flex_row().flex_wrap().gap(px(6.)).children(pills))
                 .child(
                     div()
                         .flex().items_center().gap(px(5.))
-                        .px(px(10.)).py(px(5.))
-                        .rounded_sm()
-                        .bg(rgb(ROUTE_BG)).border_1().border_color(rgb(ROUTE_BORDER))
+                        .h(px(30.))
+                        .px(px(10.))
+                        .rounded_md()
+                        .bg(rgb(PILL_BG)).border_1().border_color(rgb(PILL_BORDER))
                         .cursor_pointer()
                         .text_color(rgb(ROUTE_TEXT)).text_size(px(11.))
                         .font_weight(gpui::FontWeight::MEDIUM)
@@ -453,14 +562,13 @@ fn routable_card(
                 .when(dd_open && !dd_items.is_empty(), |d| {
                     d.child(
                         div()
-                            .bg(rgb(SURFACE)).border_1().border_color(rgb(BORDER)).rounded_md()
+                            .bg(rgb(OVERLAY)).border_1().border_color(rgb(BORDER)).rounded_md()
                             .children(dd_items),
                     )
                 }),
         )
 }
 
-// ── Simple card ───────────────────────────────────────────────────────────────
 fn simple_card(
     node_id: u32,
     name: String,
@@ -469,30 +577,37 @@ fn simple_card(
     muted: bool,
     pulse_id: Option<u32>,
     is_stream: bool,
+    color: u32,
     cx: &mut Context<MixerWindow>,
 ) -> impl IntoElement {
     div()
-        .w(px(260.)).flex().flex_col()
+        .w(px(280.)).flex().flex_col()
         .bg(rgb(CARD)).border_1().border_color(rgb(BORDER)).rounded_md()
+        .overflow_hidden()
+        .child(div().h(px(2.)).w_full().bg(rgb(color)))
         .hover(|s| s.border_color(rgb(BORDER_HOVER)).bg(rgb(CARD_HOVER)))
         .child(card_header(&name, &desc))
-        .child(vol_controls(node_id, name, volume, muted, pulse_id, is_stream, cx))
+        .child(vol_controls(node_id, name, volume, muted, pulse_id, is_stream, color, cx))
 }
 
 fn card_header(name: &str, desc: &str) -> impl IntoElement {
     let primary = if desc.is_empty() { name } else { desc };
     let secondary = if desc.is_empty() { "" } else { name };
-    div().px(px(14.)).pt(px(14.)).pb(px(8.)).flex().flex_col().gap(px(3.))
+    div().px(px(16.)).pt(px(14.)).pb(px(8.)).flex().flex_col().gap(px(3.))
         .child(
-            div().text_color(rgb(TEXT)).font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_size(px(13.)).line_height(px(18.))
-                .child(SharedString::from(clip(primary, 26))),
+            div().text_color(rgb(TEXT_PRIMARY)).font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_size(px(14.)).line_height(px(20.))
+                .child(SharedString::from(clip(primary, 28))),
         )
         .when(!secondary.is_empty(), |d| d.child(
-            div().text_color(rgb(TEXT_MUTED)).text_size(px(10.)).line_height(px(14.))
-                .child(SharedString::from(clip(secondary, 30))),
+            div().text_color(rgb(TEXT_SECONDARY)).text_size(px(11.)).line_height(px(16.))
+                .child(SharedString::from(clip(secondary, 32))),
         ))
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  VOLUME CONTROLS
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn vol_controls(
     node_id: u32,
@@ -502,33 +617,45 @@ fn vol_controls(
     #[allow(unused_variables)]
     pulse_id: Option<u32>,
     is_stream: bool,
+    accent: u32,
     _cx: &mut Context<MixerWindow>,
 ) -> impl IntoElement {
     let vol_pct = (volume * 100.0).round() as u32;
-    let bar_w = px(120.0 * volume);
+    let track_w = 130.0;
+    let thumb_w = 14.0;
+    let travel = track_w - thumb_w; // 106 — thumb stays inside track
+    let fill_w = px(volume * track_w);
+    let thumb_left = px(volume * travel);
     let nn1 = node_name.clone();
     let nn2 = node_name.clone();
     let nn3 = node_name.clone();
 
-    let bar_color = if volume > 0.8 { RED } else if volume > 0.5 { GREEN } else { GREEN };
-    let mute_bg = if muted { RED_BG } else { BTN_BG };
-    let mute_text = if muted { RED } else { TEXT_MUTED };
+    let bar_color = accent;
+    let mute_bg = if muted { RED_DIM } else { BTN_BG };
+    let mute_text = if muted { RED } else { TEXT_SECONDARY };
     let mute_label = if muted { "Unmute" } else { "Mute" };
 
-    div().px(px(14.)).pb(px(14.)).flex().flex_col().gap(px(8.))
-        // mute + percent row
+    div().px(px(16.)).pb(px(16.)).flex().flex_col().gap(px(10.))
+        // row: mute btn + percentage
         .child(
             div().flex().items_center().justify_between()
                 .child(
                     div()
-                        .px(px(10.)).py(px(4.))
-                        .rounded_sm()
+                        .h(px(28.))
+                        .px(px(10.))
+                        .flex().items_center()
+                        .rounded_md()
                         .bg(rgb(mute_bg))
+                        .border_1().border_color(rgb(if muted { RED_DIM } else { BORDER }))
                         .text_color(rgb(mute_text))
                         .text_size(px(10.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .cursor_pointer()
-                        .hover(|s| if muted { s.bg(rgb(0x4a2020)) } else { s.bg(rgb(BTN_BG_HOVER)) })
+                        .hover(|s| if muted {
+                            s.bg(rgb(0x4a2028)).border_color(rgb(0x5a3038))
+                        } else {
+                            s.bg(rgb(BTN_BG_HOVER)).border_color(rgb(BORDER_HOVER))
+                        })
                         .child(mute_label)
                         .id(SharedString::from(format!("mute-{node_id}")))
                         .on_click(move |_, _, cx: &mut App| {
@@ -544,11 +671,15 @@ fn vol_controls(
                             }
                         }),
                 )
-                .child(div().text_color(rgb(TEXT_MUTED)).text_size(px(11.)).font_weight(gpui::FontWeight::MEDIUM).child(format!("{vol_pct}%"))),
+                .child(
+                    div().text_color(rgb(TEXT_SECONDARY)).text_size(px(12.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(format!("{vol_pct}%"))
+                ),
         )
         // slider row
         .child(
-            div().flex().items_center().gap(px(8.))
+            div().flex().items_center().gap(px(10.))
                 .child(
                     step_button("−", format!("vd-{node_id}"), move |_, _, cx: &mut App| {
                         let (v, pid) = cx.try_global::<MixerGlobal>()
@@ -564,21 +695,44 @@ fn vol_controls(
                     }),
                 )
                 .child(
-                    div().w(px(120.)).h(px(6.)).rounded_full().bg(rgb(SLIDER_TRACK))
+                    div().w(px(track_w)).h(px(6.)).rounded_full().bg(rgb(SLIDER_TRACK))
                         .relative()
                         .child(
                             div().absolute().left_0().top_0().bottom_0()
-                                .w(bar_w)
+                                .w(fill_w)
                                 .rounded_full()
                                 .bg(rgb(bar_color)),
                         )
                         .child(
-                            div().absolute().top(px(-3.))
-                                .left(bar_w)
-                                .w(px(12.)).h(px(12.))
+                            div().absolute().top(px(-4.))
+                                .left(thumb_left)
+                                .w(px(thumb_w)).h(px(thumb_w))
                                 .rounded_full()
                                 .bg(rgb(SLIDER_THUMB))
-                                .border_1().border_color(rgb(SLIDER_TRACK)),
+                                .border_1().border_color(rgb(SLIDER_TRACK))
+                                .shadow_md(),
+                        )
+                        .child(
+                            div().absolute().inset_0().rounded_full().cursor_pointer()
+                                .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
+                                    let mouse_x: f32 = event.position.x.into();
+                                    let body_pad = 32.0;
+                                    let card_w = 280.0;
+                                    let gap = 16.0;
+                                    let col = ((mouse_x - body_pad) / (card_w + gap)).floor().max(0.0);
+                                    let card_left = body_pad + col * (card_w + gap);
+                                    let track_left = card_left + 16.0 + 28.0 + 10.0;
+                                    let rel_x = mouse_x - track_left;
+                                    let new_volume = (rel_x / track_w).clamp(0.0, 1.0);
+                                    if let Some(g) = cx.try_global::<MixerGlobal>() {
+                                        let pid = g.state.lock().unwrap().nodes.get(&node_id)
+                                            .map(|n| n.pulse_id).unwrap_or(None);
+                                        let _ = g.cmd_tx.send(EngineCommand::SetVolume {
+                                            node_id, volume: new_volume,
+                                            pulse_id: pid, node_name: node_name.clone(), is_stream,
+                                        });
+                                    }
+                                }),
                         ),
                 )
                 .child(
@@ -604,15 +758,16 @@ fn step_button(
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     div()
-        .w(px(24.)).h(px(24.))
+        .w(px(28.)).h(px(28.))
         .flex().items_center().justify_center()
-        .rounded_sm()
+        .rounded_md()
         .bg(rgb(BTN_BG))
-        .text_color(rgb(TEXT_MUTED))
-        .text_size(px(12.))
-        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .border_1().border_color(rgb(BORDER))
+        .text_color(rgb(TEXT_SECONDARY))
+        .text_size(px(13.))
+        .font_weight(gpui::FontWeight::BOLD)
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(BTN_BG_HOVER)).text_color(rgb(TEXT)))
+        .hover(|s| s.bg(rgb(BTN_BG_HOVER)).border_color(rgb(BORDER_HOVER)).text_color(rgb(TEXT_PRIMARY)))
         .child(SharedString::from(label.to_string()))
         .id(SharedString::from(id))
         .on_click(on_click)
