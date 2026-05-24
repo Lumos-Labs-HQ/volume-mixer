@@ -11,6 +11,8 @@ pub struct MixerWindow {
     open_output_popover: Option<u32>,
     open_input_dropdown: Option<u32>,
     dragging_slider: Option<u32>,
+    drag_start_x: f32,
+    drag_start_volume: f32,
 }
 
 impl MixerWindow {
@@ -19,6 +21,8 @@ impl MixerWindow {
             open_output_popover: None,
             open_input_dropdown: None,
             dragging_slider: None,
+            drag_start_x: 0.0,
+            drag_start_volume: 0.0,
         }
     }
 
@@ -173,9 +177,8 @@ impl Render for MixerWindow {
         // Handle active slider drag in render loop for smooth updates
         if let Some(drag_id) = self.dragging_slider {
             let mouse_x: f32 = _window.mouse_position().x.into();
-            let window_w: f32 = _window.bounds().size.width.into();
-            let track_left = if window_w > 1072.0 { window_w / 2.0 - 186.0 } else { 350.0 };
-            let new_volume = ((mouse_x - track_left) / 200.0).clamp(0.0, 1.0);
+            let delta = mouse_x - self.drag_start_x;
+            let new_volume = (self.drag_start_volume + delta / 140.0).clamp(0.0, 1.0);
             if let Some(g) = cx.try_global::<MixerGlobal>() {
                 let s = g.state.lock().unwrap();
                 if let Some(node) = s.nodes.get(&drag_id) {
@@ -230,9 +233,9 @@ impl Render for MixerWindow {
 
         let mut body = div()
             .w_full()
-            .max_w(px(1024.))
+            .max_w(px(560.))
             .mx_auto()
-            .flex().flex_col().gap(px(24.));
+            .flex().flex_col().gap(px(12.));
         for child in body_children {
             body = body.child(child);
         }
@@ -241,6 +244,7 @@ impl Render for MixerWindow {
             .size_full()
             .relative()
             .flex().flex_col()
+            .rounded_2xl()
             .bg(bg_gradient())
             .text_color(rgb(TEXT_PRIMARY))
             .font_family("Inter")
@@ -250,7 +254,7 @@ impl Render for MixerWindow {
                     .flex_1()
                     .id("body-scroll")
                     .overflow_y_scroll()
-                    .px(px(24.)).py(px(24.))
+                    .px(px(16.)).py(px(16.))
                     .flex()
                     .flex_col()
                     .child(body)
@@ -364,7 +368,7 @@ fn render_header(apps: usize, outs: usize, ins: usize) -> gpui::Div {
     div().flex().flex_col().gap(px(4.))
         .child(
             div()
-                .text_size(px(22.))
+                .text_size(px(18.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(rgb(VIOLET_400))
                 .child("PipeWire Mixer")
@@ -405,16 +409,16 @@ fn empty_state() -> gpui::Div {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn render_applications_section(cards: Vec<gpui::Div>) -> gpui::Div {
-    let mut section = div().flex().flex_col().gap(px(12.));
+    let mut section = div().flex().flex_col().gap(px(8.));
     section = section.child(
         div()
-            .text_size(px(12.))
+            .text_size(px(11.))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(rgb(TEXT_SECONDARY))
             .px(px(4.))
             .child("Applications")
     );
-    let mut list = div().flex().flex_col().gap(px(10.));
+    let mut list = div().flex().flex_col().gap(px(6.));
     for card in cards {
         list = list.child(card);
     }
@@ -462,33 +466,33 @@ fn render_app_card(
         .w_full()
         .rounded_2xl()
         .bg(rgb(CARD))
-        .p(px(16.))
-        .flex().flex_col().gap(px(12.))
+        .p(px(12.))
+        .flex().flex_col().gap(px(8.))
         .hover(|s| s.bg(rgb(CARD_HOVER)))
         .child(
-            div().flex().items_center().gap(px(14.))
+            div().flex().items_center().gap(px(10.))
                 .child(
                     div()
-                        .w(px(40.)).h(px(40.))
+                        .w(px(32.)).h(px(32.))
                         .flex().items_center().justify_center()
                         .rounded_xl()
                         .bg(app_icon_bg())
-                        .child(icons::app_icon(group.icon, 20., VIOLET_400, None))
+                        .child(icons::app_icon(group.icon, 16., VIOLET_400, None))
                 )
                 .child(
                     div()
-                        .w(px(200.))
+                        .flex_1()
                         .flex().flex_col().gap(px(2.))
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(px(12.))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(rgb(TEXT_PRIMARY))
-                                .child(clip(&group.name, 32))
+                                .child(clip(&group.name, 28))
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(px(10.))
                                 .text_color(rgb(TEXT_MUTED))
                                 .child(format!("{out_count} out • {in_count} in"))
                         )
@@ -520,7 +524,7 @@ fn render_output_routing(
         .cloned()
         .collect();
 
-    let mut pills_row = div().flex().flex_row().flex_wrap().items_center().gap(px(6.));
+    let mut pills_row = div().flex().flex_row().flex_wrap().items_center().gap(px(4.));
 
     for (out_id, out_desc) in linked_outputs {
         let from_name = group_name.clone();
@@ -532,9 +536,9 @@ fn render_output_routing(
         let device_type = infer_device_type(&desc);
 
         let pill = div()
-            .flex().items_center().gap(px(6.))
-            .h(px(28.))
-            .px(px(10.))
+            .flex().items_center().gap(px(5.))
+            .h(px(24.))
+            .px(px(8.))
             .rounded_full()
             .bg(ca(EMERALD_500, 0.10))
             .text_color(rgb(EMERALD_400))
@@ -568,8 +572,8 @@ fn render_output_routing(
 
     let add_btn = div()
         .flex().items_center().gap(px(4.))
-        .h(px(28.))
-        .px(px(10.))
+        .h(px(24.))
+        .px(px(8.))
         .rounded_full()
         .bg(rgb(0x1a1f2e))
         .border_1().border_color(rgb(0x252a3a))
@@ -588,13 +592,17 @@ fn render_output_routing(
 
     pills_row = pills_row.child(add_btn);
 
+    let mut popover: Option<gpui::Div> = None;
     if is_open && !available.is_empty() {
-        let mut popover = div()
-            .bg(rgb(OVERLAY))
+        let mut popover_div = div()
+            .absolute()
+            .top(px(30.))
+            .left_0()
+            .bg(rgb(0x1a1f2e))
             .border_1().border_color(rgb(0x252a3a))
             .rounded_xl()
             .p(px(6.))
-            .w(px(220.))
+            .w(px(200.))
             .flex().flex_col().gap(px(2.));
 
         for (out_id, out_desc, out_name) in available {
@@ -604,15 +612,15 @@ fn render_output_routing(
             let device_type = infer_device_type(&desc);
             let item = div()
                 .w_full()
-                .flex().items_center().gap(px(8.))
-                .px(px(10.)).py(px(8.))
+                .flex().items_center().gap(px(6.))
+                .px(px(8.)).py(px(6.))
                 .rounded_xl()
                 .cursor_pointer()
                 .text_color(rgb(TEXT_SECONDARY))
                 .hover(|s| s.bg(rgb(0x1e2330)))
-                .child(icons::output_device_icon(&device_type, 14., TEXT_SECONDARY, None))
+                .child(icons::output_device_icon(&device_type, 12., TEXT_SECONDARY, None))
                 .child(
-                    div().text_size(px(12.)).child(clip(&desc, 28))
+                    div().text_size(px(11.)).child(clip(&desc, 26))
                 )
                 .id(SharedString::from(format!("out-item-{group_id}-{out_id}")))
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -625,22 +633,30 @@ fn render_output_routing(
                     this.open_output_popover = None;
                     cx.notify();
                 }));
-            popover = popover.child(item);
+            popover_div = popover_div.child(item);
         }
-        pills_row = pills_row.child(popover);
+        popover = Some(popover_div);
+    }
+
+    let mut pills_container = div()
+        .relative()
+        .flex().flex_row().flex_wrap().items_center().gap(px(4.))
+        .child(pills_row);
+    if let Some(pop) = popover {
+        pills_container = pills_container.child(pop);
     }
 
     div()
         .flex_1()
-        .flex().flex_col().gap(px(8.))
+        .flex().flex_col().gap(px(6.))
         .child(
             div()
-                .text_size(px(10.))
+                .text_size(px(9.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(rgb(TEXT_MUTED))
                 .child("OUTPUT")
         )
-        .child(pills_row)
+        .child(pills_container)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -804,16 +820,16 @@ fn render_input_routing(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn render_output_devices_section(rows: Vec<gpui::Div>) -> gpui::Div {
-    let mut section = div().flex().flex_col().gap(px(12.));
+    let mut section = div().flex().flex_col().gap(px(8.));
     section = section.child(
         div()
-            .text_size(px(12.))
+            .text_size(px(11.))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(rgb(TEXT_SECONDARY))
             .px(px(4.))
             .child("Output Devices")
     );
-    let mut list = div().flex().flex_col().gap(px(8.));
+    let mut list = div().flex().flex_col().gap(px(6.));
     for row in rows {
         list = list.child(row);
     }
@@ -825,16 +841,16 @@ fn render_output_devices_section(rows: Vec<gpui::Div>) -> gpui::Div {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn render_input_devices_section(rows: Vec<gpui::Div>) -> gpui::Div {
-    let mut section = div().flex().flex_col().gap(px(12.));
+    let mut section = div().flex().flex_col().gap(px(8.));
     section = section.child(
         div()
-            .text_size(px(12.))
+            .text_size(px(11.))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(rgb(TEXT_SECONDARY))
             .px(px(4.))
             .child("Input Devices")
     );
-    let mut list = div().flex().flex_col().gap(px(8.));
+    let mut list = div().flex().flex_col().gap(px(6.));
     for row in rows {
         list = list.child(row);
     }
@@ -876,12 +892,12 @@ fn render_device_row(
         .w_full()
         .rounded_2xl()
         .bg(rgb(CARD))
-        .p(px(14.))
-        .flex().items_center().gap(px(14.))
+        .p(px(10.))
+        .flex().items_center().gap(px(10.))
         .hover(|s| s.bg(rgb(CARD_HOVER)))
         .child(
             div()
-                .w(px(40.)).h(px(40.))
+                .w(px(32.)).h(px(32.))
                 .flex().items_center().justify_center()
                 .rounded_xl()
                 .bg(icon_bg)
@@ -889,18 +905,18 @@ fn render_device_row(
         )
         .child(
             div()
-                .w(px(200.))
+                .flex_1()
                 .flex().flex_col().gap(px(2.))
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(px(12.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(rgb(TEXT_PRIMARY))
-                        .child(clip(&description, 32))
+                        .child(clip(&description, 28))
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(px(10.))
                         .text_color(rgb(TEXT_MUTED))
                         .child(if kind == "input" { "Input" } else { "Output" })
                 )
@@ -923,8 +939,8 @@ fn volume_slider(
     cx: &mut Context<MixerWindow>,
 ) -> gpui::Div {
     let vol_pct = if muted { 0 } else { (volume * 100.0).round() as u32 };
-    let track_w = 200.0;
-    let thumb_w = 14.0;
+    let track_w = 140.0;
+    let thumb_w = 12.0;
     let travel = track_w - thumb_w;
     let fill_w = px(volume * track_w);
     let thumb_left = px(volume * travel);
@@ -991,9 +1007,11 @@ fn volume_slider(
         .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &gpui::MouseDownEvent, window, _cx| {
             let mouse_x: f32 = event.position.x.into();
             let window_w: f32 = window.bounds().size.width.into();
-            let track_left = if window_w > 1072.0 { window_w / 2.0 - 186.0 } else { 350.0 };
+            let track_left = if window_w > 592.0 { window_w / 2.0 + 80.0 } else { window_w - 216.0 };
             let new_volume = ((mouse_x - track_left) / track_w).clamp(0.0, 1.0);
             this.dragging_slider = Some(node_id);
+            this.drag_start_x = mouse_x;
+            this.drag_start_volume = new_volume;
             if let Some(g) = _cx.try_global::<MixerGlobal>() {
                 let _ = g.cmd_tx.send(EngineCommand::SetVolume {
                     node_id,
@@ -1024,8 +1042,7 @@ fn volume_slider(
         .child(format!("{vol_pct}%"));
 
     div()
-        .flex_1()
-        .flex().items_center().gap(px(10.))
+        .flex().items_center().gap(px(8.))
         .child(mute_btn)
         .child(slider_track)
         .child(pct_label)

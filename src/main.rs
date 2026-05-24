@@ -1,6 +1,6 @@
 use gpui::{
-    App, Application, AssetSource, Bounds, SharedString, TitlebarOptions, WindowDecorations,
-    WindowOptions, prelude::*, px, size,
+    App, Application, AssetSource, Bounds, SharedString, TitlebarOptions, WindowBackgroundAppearance,
+    WindowDecorations, WindowOptions, prelude::*, px, size,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -70,12 +70,13 @@ fn main() {
                 .open_window(
                     WindowOptions {
                         window_decorations: Some(WindowDecorations::Client),
+                        window_background: WindowBackgroundAppearance::Transparent,
                         window_bounds: Some(gpui::WindowBounds::Windowed(Bounds::centered(
                             None,
-                            size(px(760.), px(800.)),
+                            size(px(560.), px(520.)),
                             cx,
                         ))),
-                        window_min_size: Some(size(px(720.), px(480.))),
+                        window_min_size: Some(size(px(480.), px(400.))),
                         titlebar: Some(TitlebarOptions {
                             title: Some("PipeWire Mixer".into()),
                             ..Default::default()
