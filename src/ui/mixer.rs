@@ -31,10 +31,17 @@ impl MixerWindow {
             .map(|g| { let mut v = vec![]; while let Ok(e) = g.event_rx.try_recv() { v.push(e); } v })
             .unwrap_or_default();
         if events.is_empty() { return; }
+
+        let mut new_output_device = false;
         if let Some(g) = cx.try_global::<MixerGlobal>() {
             let mut s = g.state.lock().unwrap();
             for ev in events {
                 match ev {
+                    EngineEvent::NodeAdded(ref n) if matches!(n.node_type,
+                        crate::models::NodeType::OutputDevice | crate::models::NodeType::VirtualBus) => {
+                        new_output_device = true;
+                        s.nodes.insert(n.id, n.clone());
+                    }
                     EngineEvent::NodeAdded(n) | EngineEvent::NodeChanged(n) => { s.nodes.insert(n.id, n); }
                     EngineEvent::NodeRemoved(id) => { s.nodes.remove(&id); s.node_ports.remove(&id); }
                     EngineEvent::PortAdded(p) => {
@@ -55,6 +62,23 @@ impl MixerWindow {
                     EngineEvent::MuteChanged { node_id, muted } => {
                         if let Some(n) = s.nodes.get_mut(&node_id) { n.muted = muted; }
                     }
+                }
+            }
+
+            // When a new output device appears, re-apply all existing app→device routing
+            if new_output_device {
+                let pairs: Vec<(String, String)> = s.links.values()
+                    .filter_map(|l| {
+                        let from = s.nodes.get(&l.output_node)?;
+                        let to = s.nodes.get(&l.input_node)?;
+                        if matches!(from.node_type, crate::models::NodeType::App) {
+                            Some((from.name.clone(), to.name.clone()))
+                        } else { None }
+                    })
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter().collect();
+                if !pairs.is_empty() {
+                    let _ = g.cmd_tx.send(EngineCommand::RestoreLinks { pairs });
                 }
             }
         }
@@ -515,7 +539,7 @@ fn render_output_routing(
     open_popover: Option<u32>,
     cx: &mut Context<MixerWindow>,
 ) -> gpui::Div {
-    let group_name = group.name.clone();
+    let group_name = group.node_name.clone(); // raw pw node.name for pw-link
     let group_id = group.playback_id.unwrap_or(0);
     let is_open = open_popover == Some(group_id);
 
@@ -595,14 +619,13 @@ fn render_output_routing(
     let mut popover: Option<gpui::Div> = None;
     if is_open && !available.is_empty() {
         let mut popover_div = div()
-            .absolute()
-            .top(px(30.))
-            .left_0()
-            .bg(rgb(0x1a1f2e))
-            .border_1().border_color(rgb(0x252a3a))
+            // inline, not absolute — avoids z-index/clipping issues
+            .mt(px(4.))
+            .bg(rgb(0x0d1117))
+            .border_1().border_color(rgb(0x2a2e42))
             .rounded_xl()
             .p(px(6.))
-            .w(px(200.))
+            .w_full()
             .flex().flex_col().gap(px(2.));
 
         for (out_id, out_desc, out_name) in available {
@@ -617,7 +640,7 @@ fn render_output_routing(
                 .rounded_xl()
                 .cursor_pointer()
                 .text_color(rgb(TEXT_SECONDARY))
-                .hover(|s| s.bg(rgb(0x1e2330)))
+                .hover(|s| s.bg(rgb(0x1a1f2e)))
                 .child(icons::output_device_icon(&device_type, 12., TEXT_SECONDARY, None))
                 .child(
                     div().text_size(px(11.)).child(clip(&desc, 26))
@@ -639,8 +662,7 @@ fn render_output_routing(
     }
 
     let mut pills_container = div()
-        .relative()
-        .flex().flex_row().flex_wrap().items_center().gap(px(4.))
+        .flex().flex_col().gap(px(4.))
         .child(pills_row);
     if let Some(pop) = popover {
         pills_container = pills_container.child(pop);

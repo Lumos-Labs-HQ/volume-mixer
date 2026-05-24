@@ -59,7 +59,8 @@ pub struct MixerState {
 /// A unified application that may have both playback and capture streams.
 #[derive(Debug, Clone)]
 pub struct AppGroup {
-    pub name: String,
+    pub name: String,          // display name (e.g. "Discord")
+    pub node_name: String,     // raw pw node.name for pw-link (e.g. "WEBRTC VoiceEngine")
     pub playback_id: Option<u32>,
     pub capture_id: Option<u32>,
     pub volume: f32,
@@ -113,6 +114,7 @@ impl MixerState {
             let name = node.description.clone();
             let group = groups.entry(name.clone()).or_insert_with(|| AppGroup {
                 name: name.clone(),
+                node_name: node.name.clone(),
                 playback_id: None,
                 capture_id: None,
                 volume: node.volume,
@@ -120,6 +122,7 @@ impl MixerState {
                 icon: AppIcon::Music,
             });
             group.playback_id = Some(node.id);
+            group.node_name = node.name.clone();
             group.volume = node.volume;
             group.muted = node.muted;
         }
@@ -129,6 +132,7 @@ impl MixerState {
             let name = node.description.clone();
             let group = groups.entry(name.clone()).or_insert_with(|| AppGroup {
                 name: name.clone(),
+                node_name: node.name.clone(),
                 playback_id: None,
                 capture_id: None,
                 volume: node.volume,
@@ -136,8 +140,8 @@ impl MixerState {
                 icon: AppIcon::Mic,
             });
             group.capture_id = Some(node.id);
-            // If no playback stream, use capture volume
             if group.playback_id.is_none() {
+                group.node_name = node.name.clone();
                 group.volume = node.volume;
                 group.muted = node.muted;
             }
@@ -193,11 +197,14 @@ impl MixerState {
     }
 
     /// Find all output device node IDs linked from a given playback (App) node.
-    /// In PipeWire, playback links go: App (output) -> OutputDevice (input).
+    /// Deduplicated — PipeWire creates one link per port (FL/FR), so the same
+    /// output device can appear multiple times; we return unique node IDs only.
     pub fn playback_output_devices(&self, playback_id: u32) -> Vec<u32> {
+        let mut seen = std::collections::HashSet::new();
         self.links.values()
             .filter(|l| l.output_node == playback_id)
             .map(|l| l.input_node)
+            .filter(|id| seen.insert(*id))
             .collect()
     }
 }
@@ -223,6 +230,8 @@ pub enum EngineCommand {
     SetMute   { node_id: u32, muted: bool, pulse_id: Option<u32>, node_name: String, is_stream: bool },
     CreateLink { from_name: String, to_name: String },
     RemoveLink { from_name: String, to_name: String },
+    /// Re-apply a list of (app_node_name, sink_node_name) links after a device reconnects
+    RestoreLinks { pairs: Vec<(String, String)> },
     #[allow(dead_code)]
     LoadNullSink { name: String },
     #[allow(dead_code)]

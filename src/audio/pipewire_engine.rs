@@ -11,6 +11,49 @@ pub struct PipeWireEngine {
     _cmd_tx: Sender<EngineCommand>,
 }
 
+impl Drop for PipeWireEngine {
+    fn drop(&mut self) {
+        // Remove all app stream → device links (restore PipeWire default routing)
+        if let Ok(out) = Command::new("pw-link").args(["-l"]).output() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            // Collect "output_port |-> input_port" pairs and disconnect them
+            // pw-link -l format: "NodeA:port\n  |-> NodeB:port"
+            let mut current_out: Option<String> = None;
+            for line in text.lines() {
+                let t = line.trim();
+                if !t.starts_with("|->") && !t.starts_with("|<-") {
+                    current_out = Some(t.to_string());
+                } else if t.starts_with("|->") {
+                    if let Some(ref out_port) = current_out {
+                        let in_port = t.trim_start_matches("|->").trim();
+                        let _ = Command::new("pw-link")
+                            .args(["-d", out_port, in_port])
+                            .output();
+                    }
+                }
+            }
+        }
+
+        // Restore all sink-input volumes to 100% and unmute
+        if let Ok(out) = Command::new("pactl").args(["list", "short", "sink-inputs"]).output() {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                if let Some(id) = line.split_whitespace().next() {
+                    let _ = Command::new("pactl").args(["set-sink-input-volume", id, "100%"]).output();
+                    let _ = Command::new("pactl").args(["set-sink-input-mute", id, "0"]).output();
+                }
+            }
+        }
+        if let Ok(out) = Command::new("pactl").args(["list", "short", "source-outputs"]).output() {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                if let Some(id) = line.split_whitespace().next() {
+                    let _ = Command::new("pactl").args(["set-source-output-volume", id, "100%"]).output();
+                    let _ = Command::new("pactl").args(["set-source-output-mute", id, "0"]).output();
+                }
+            }
+        }
+    }
+}
+
 impl PipeWireEngine {
     pub fn new(event_tx: Sender<EngineEvent>) -> (Self, Sender<EngineCommand>) {
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
@@ -92,22 +135,27 @@ fn run_monitor_thread(
                                 .as_ref()
                                 .and_then(|m| m.get("object.serial").and_then(|s| s.parse().ok()));
 
-                            // For stream nodes, get the real app binary name from pactl
-                            let display_name = if matches!(node_type, NodeType::App | NodeType::AppInput) {
-                                pulse_id
-                                    .and_then(|pid| pactl_binary_name(pid))
-                                    .unwrap_or_else(|| description.clone())
-                            } else {
-                                description.clone()
-                            };
+                            // For stream nodes, get the real app binary name and actual volume from pactl
+                            let (display_name, initial_volume, initial_muted) =
+                                if matches!(node_type, NodeType::App | NodeType::AppInput) {
+                                    let name = pulse_id
+                                        .and_then(|pid| pactl_binary_name(pid))
+                                        .unwrap_or_else(|| description.clone());
+                                    let (vol, muted) = pulse_id
+                                        .and_then(|pid| pactl_stream_state(pid))
+                                        .unwrap_or((1.0, false));
+                                    (name, vol, muted)
+                                } else {
+                                    (description.clone(), 1.0, false)
+                                };
 
                             let event = EngineEvent::NodeAdded(AudioNode {
                                 id,
                                 name: node_name,
                                 description: display_name,
                                 node_type,
-                                volume: 1.0,
-                                muted: false,
+                                volume: initial_volume,
+                                muted: initial_muted,
                                 pulse_id,
                             });
                             let _ = event_tx.send(event);
@@ -250,6 +298,11 @@ fn run_command_thread(cmd_rx: Receiver<EngineCommand>, event_tx: Sender<EngineEv
             EngineCommand::RemoveLink { from_name, to_name } => {
                 link_nodes(&from_name, &to_name, true);
             }
+            EngineCommand::RestoreLinks { pairs } => {
+                for (from_name, to_name) in pairs {
+                    link_nodes(&from_name, &to_name, false);
+                }
+            }
             EngineCommand::LoadNullSink { name } => {
                 let _ = Command::new("pw-cli")
                     .args([
@@ -299,9 +352,37 @@ fn reset_all_mutes() {
     }
 }
 
+/// Get current volume (0.0-1.0) and mute state for a stream by pulse_id.
+fn pactl_stream_state(pulse_id: u32) -> Option<(f32, bool)> {
+    for list_type in &["sink-inputs", "source-outputs"] {
+        let out = Command::new("pactl").args(["list", list_type]).output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut in_block = false;
+        let mut volume: Option<f32> = None;
+        let mut muted = false;
+        for line in text.lines() {
+            let t = line.trim();
+            if t.contains(&format!("#{pulse_id}")) { in_block = true; volume = None; muted = false; }
+            else if in_block {
+                if t.starts_with("Volume:") {
+                    // "front-left: 65536 / 100% / ..."
+                    if let Some(pct) = t.split('/').nth(1) {
+                        if let Ok(v) = pct.trim().trim_end_matches('%').parse::<f32>() {
+                            volume = Some((v / 100.0).clamp(0.0, 1.0));
+                        }
+                    }
+                } else if t.starts_with("Mute:") {
+                    muted = t.contains("yes");
+                }
+                if volume.is_some() && (t.starts_with("Sink Input #") || t.starts_with("Source Output #")) { break; }
+            }
+        }
+        if let Some(v) = volume { return Some((v, muted)); }
+    }
+    None
+}
+
 /// Look up the real process binary name for a stream node via pactl.
-/// pactl's "Sink Input #N" index matches the node's object.serial (pulse_id).
-/// Falls back to None if not found (e.g. source-outputs use different list).
 fn pactl_binary_name(pulse_id: u32) -> Option<String> {
     // Try sink-inputs first (playback), then source-outputs (capture)
     for list_type in &["sink-inputs", "source-outputs"] {
