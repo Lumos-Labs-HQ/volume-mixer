@@ -581,7 +581,7 @@ fn render_output_routing(
                     .cursor_pointer()
                     .hover(|s| s.bg(ca(EMERALD_500, 0.15)))
                     .child(icons::ico_x(12., EMERALD_400))
-                    .id(SharedString::from(format!("unroute-{}", out_id)))
+                    .id(SharedString::from(format!("unroute-{}-{}", group_id, out_id)))
                     .on_click(move |_, _, cx: &mut App| {
                         if let Some(g) = cx.try_global::<MixerGlobal>() {
                             let _ = g.cmd_tx.send(EngineCommand::RemoveLink {
