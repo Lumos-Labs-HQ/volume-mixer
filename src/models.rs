@@ -56,6 +56,24 @@ pub struct MixerState {
     pub node_ports: HashMap<u32, Vec<u32>>, // node_id -> port_ids
 }
 
+/// A unified application that may have both playback and capture streams.
+#[derive(Debug, Clone)]
+pub struct AppGroup {
+    pub name: String,
+    pub playback_id: Option<u32>,
+    pub capture_id: Option<u32>,
+    pub volume: f32,
+    pub muted: bool,
+    pub icon: AppIcon,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppIcon {
+    Music,
+    Mic,
+    Speaker,
+}
+
 impl MixerState {
     pub fn playback_apps(&self) -> Vec<&AudioNode> {
         self.nodes
@@ -82,6 +100,103 @@ impl MixerState {
         self.nodes
             .values()
             .filter(|n| matches!(n.node_type, NodeType::AppInput))
+            .collect()
+    }
+
+    /// Group App (playback) and AppInput (capture) nodes by their display name.
+    /// Returns deduplicated app groups sorted by name.
+    pub fn app_groups(&self) -> Vec<AppGroup> {
+        let mut groups: HashMap<String, AppGroup> = HashMap::new();
+
+        // First pass: add all playback apps
+        for node in self.playback_apps() {
+            let name = node.description.clone();
+            let group = groups.entry(name.clone()).or_insert_with(|| AppGroup {
+                name: name.clone(),
+                playback_id: None,
+                capture_id: None,
+                volume: node.volume,
+                muted: node.muted,
+                icon: AppIcon::Music,
+            });
+            group.playback_id = Some(node.id);
+            group.volume = node.volume;
+            group.muted = node.muted;
+        }
+
+        // Second pass: add/merge capture apps
+        for node in self.app_inputs() {
+            let name = node.description.clone();
+            let group = groups.entry(name.clone()).or_insert_with(|| AppGroup {
+                name: name.clone(),
+                playback_id: None,
+                capture_id: None,
+                volume: node.volume,
+                muted: node.muted,
+                icon: AppIcon::Mic,
+            });
+            group.capture_id = Some(node.id);
+            // If no playback stream, use capture volume
+            if group.playback_id.is_none() {
+                group.volume = node.volume;
+                group.muted = node.muted;
+            }
+        }
+
+        // Determine icon: speaker if both playback+capture, mic if only capture, music default
+        for group in groups.values_mut() {
+            group.icon = if group.playback_id.is_some() && group.capture_id.is_some() {
+                AppIcon::Speaker
+            } else if group.capture_id.is_some() {
+                AppIcon::Mic
+            } else {
+                AppIcon::Music
+            };
+        }
+
+        // Deduplicate: if multiple playback nodes share a name, keep the one with highest pulse_id
+        let mut deduped: HashMap<String, AppGroup> = HashMap::new();
+        for (name, group) in groups {
+            let existing = deduped.get(&name);
+            let should_replace = match existing {
+                None => true,
+                Some(existing_group) => {
+                    let existing_pid = existing_group.playback_id
+                        .and_then(|id| self.nodes.get(&id))
+                        .and_then(|n| n.pulse_id)
+                        .unwrap_or(0);
+                    let new_pid = group.playback_id
+                        .and_then(|id| self.nodes.get(&id))
+                        .and_then(|n| n.pulse_id)
+                        .unwrap_or(0);
+                    new_pid > existing_pid
+                }
+            };
+            if should_replace {
+                deduped.insert(name, group);
+            }
+        }
+
+        let mut result: Vec<AppGroup> = deduped.into_values().collect();
+        result.sort_by(|a, b| a.name.cmp(&b.name));
+        result
+    }
+
+    /// Find the input device node ID linked to a given capture (AppInput) node.
+    /// In PipeWire, capture links go: InputDevice (output) -> AppInput (input).
+    /// So we look for links where input_node == capture_id and return output_node.
+    pub fn capture_input_device(&self, capture_id: u32) -> Option<u32> {
+        self.links.values()
+            .find(|l| l.input_node == capture_id)
+            .map(|l| l.output_node)
+    }
+
+    /// Find all output device node IDs linked from a given playback (App) node.
+    /// In PipeWire, playback links go: App (output) -> OutputDevice (input).
+    pub fn playback_output_devices(&self, playback_id: u32) -> Vec<u32> {
+        self.links.values()
+            .filter(|l| l.output_node == playback_id)
+            .map(|l| l.input_node)
             .collect()
     }
 }
