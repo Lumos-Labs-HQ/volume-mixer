@@ -10,6 +10,7 @@ use crate::ui::icons;
 pub struct MixerWindow {
     open_output_popover: Option<u32>,
     open_input_dropdown: Option<u32>,
+    dragging_slider: Option<u32>,
 }
 
 impl MixerWindow {
@@ -17,6 +18,7 @@ impl MixerWindow {
         MixerWindow {
             open_output_popover: None,
             open_input_dropdown: None,
+            dragging_slider: None,
         }
     }
 
@@ -166,7 +168,29 @@ impl Render for MixerWindow {
         let out_count = out_devices.len();
         let in_count = in_devices.len();
         let open_out_popover = self.open_output_popover;
-        let open_in_dropdown = self.open_input_dropdown;
+        let _open_in_dropdown = self.open_input_dropdown;
+
+        // Handle active slider drag in render loop for smooth updates
+        if let Some(drag_id) = self.dragging_slider {
+            let mouse_x: f32 = _window.mouse_position().x.into();
+            let window_w: f32 = _window.bounds().size.width.into();
+            let track_left = if window_w > 1072.0 { window_w / 2.0 - 186.0 } else { 350.0 };
+            let new_volume = ((mouse_x - track_left) / 200.0).clamp(0.0, 1.0);
+            if let Some(g) = cx.try_global::<MixerGlobal>() {
+                let s = g.state.lock().unwrap();
+                if let Some(node) = s.nodes.get(&drag_id) {
+                    if (new_volume - node.volume).abs() > 0.005 {
+                        let _ = g.cmd_tx.send(EngineCommand::SetVolume {
+                            node_id: drag_id,
+                            volume: new_volume,
+                            pulse_id: node.pulse_id,
+                            node_name: node.name.clone(),
+                            is_stream: matches!(node.node_type, crate::models::NodeType::App | crate::models::NodeType::AppInput),
+                        });
+                    }
+                }
+            }
+        }
 
         // Build children collections before chaining to avoid closure borrow issues
         let mut app_cards: Vec<gpui::Div> = vec![];
@@ -174,9 +198,7 @@ impl Render for MixerWindow {
             app_cards.push(render_app_card(
                 group,
                 &out_devices,
-                &in_devices,
                 open_out_popover,
-                open_in_dropdown,
                 cx,
             ));
         }
@@ -402,9 +424,7 @@ fn render_applications_section(cards: Vec<gpui::Div>) -> gpui::Div {
 fn render_app_card(
     group: &AppGroup,
     output_devices: &[(u32, String, String)],
-    input_devices: &[(u32, String, String)],
     open_out_popover: Option<u32>,
-    open_in_dropdown: Option<u32>,
     cx: &mut Context<MixerWindow>,
 ) -> gpui::Div {
     let group = group.clone();
@@ -423,17 +443,8 @@ fn render_app_card(
         vec![]
     };
 
-    let current_input: Option<(u32, String)> = if let Some(g) = cx.try_global::<MixerGlobal>() {
-        let s = g.state.lock().unwrap();
-        group.capture_id
-            .and_then(|cid| s.capture_input_device(cid))
-            .and_then(|id| s.nodes.get(&id).map(|n| (id, n.description.clone())))
-    } else {
-        None
-    };
-
     let out_count = linked_outputs.len();
-    let in_count = if current_input.is_some() { 1 } else { 0 };
+    let in_count = if group.capture_id.is_some() { 1 } else { 0 };
 
     let vol_node_id = group.playback_id.unwrap_or(group.capture_id.unwrap_or(0));
     let vol_node_name = group.name.clone();
@@ -444,14 +455,6 @@ fn render_app_card(
         output_devices,
         &linked_outputs,
         open_out_popover,
-        cx,
-    );
-
-    let input_routing = render_input_routing(
-        &group,
-        input_devices,
-        current_input,
-        open_in_dropdown,
         cx,
     );
 
@@ -491,14 +494,10 @@ fn render_app_card(
                         )
                 )
                 .child(
-                    volume_slider(vol_node_id, vol_node_name, group.volume, group.muted, is_stream)
+                    volume_slider(vol_node_id, vol_node_name, group.volume, group.muted, is_stream, cx)
                 )
         )
-        .child(
-            div().flex().flex_row().gap(px(16.))
-                .child(output_routing)
-                .child(input_routing)
-        )
+        .child(output_routing)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -648,6 +647,7 @@ fn render_output_routing(
 //  INPUT ROUTING
 // ═══════════════════════════════════════════════════════════════════════════════
 
+#[allow(dead_code)]
 fn render_input_routing(
     group: &AppGroup,
     input_devices: &[(u32, String, String)],
@@ -906,7 +906,7 @@ fn render_device_row(
                 )
         )
         .child(
-            volume_slider(node_id, node_name, volume, muted, is_stream)
+            volume_slider(node_id, node_name, volume, muted, is_stream, cx)
         )
 }
 
@@ -920,6 +920,7 @@ fn volume_slider(
     volume: f32,
     muted: bool,
     is_stream: bool,
+    cx: &mut Context<MixerWindow>,
 ) -> gpui::Div {
     let vol_pct = if muted { 0 } else { (volume * 100.0).round() as u32 };
     let track_w = 200.0;
@@ -928,8 +929,6 @@ fn volume_slider(
     let fill_w = px(volume * track_w);
     let thumb_left = px(volume * travel);
     let nn = node_name.clone();
-    let nn1 = node_name.clone();
-    let nn2 = node_name.clone();
 
     let mute_color = if muted { ROSE_400 } else { TEXT_SECONDARY };
     let mute_bg = if muted { ca(ROSE_500, 0.15) } else { rgb(0x1a1f2e) };
@@ -964,25 +963,57 @@ fn volume_slider(
         });
 
     let slider_track = div()
-        .w(px(track_w)).h(px(6.))
-        .rounded_full()
-        .bg(ca(SLIDER_TRACK, 0.05))
-        .relative()
+        .w(px(track_w)).h(px(20.))
+        .flex().items_center()
+        .cursor_pointer()
         .child(
-            div().absolute().left_0().top_0().bottom_0()
-                .w(fill_w)
+            div().w(px(track_w)).h(px(6.))
                 .rounded_full()
-                .bg(slider_gradient()),
+                .bg(ca(SLIDER_TRACK, 0.05))
+                .relative()
+                .child(
+                    div().absolute().left_0().top_0().bottom_0()
+                        .w(fill_w)
+                        .rounded_full()
+                        .bg(slider_gradient()),
+                )
+                .child(
+                    div().absolute().top(px(-4.))
+                        .left(thumb_left)
+                        .w(px(thumb_w)).h(px(thumb_w))
+                        .rounded_full()
+                        .bg(rgb(0xffffff))
+                        .border_1().border_color(ca(SLIDER_TRACK, 0.10))
+                        .shadow_md(),
+                )
         )
-        .child(
-            div().absolute().top(px(-4.))
-                .left(thumb_left)
-                .w(px(thumb_w)).h(px(thumb_w))
-                .rounded_full()
-                .bg(rgb(0xffffff))
-                .border_1().border_color(ca(SLIDER_TRACK, 0.10))
-                .shadow_md(),
-        );
+        .id(SharedString::from(format!("track-{node_id}")))
+        .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &gpui::MouseDownEvent, window, _cx| {
+            let mouse_x: f32 = event.position.x.into();
+            let window_w: f32 = window.bounds().size.width.into();
+            let track_left = if window_w > 1072.0 { window_w / 2.0 - 186.0 } else { 350.0 };
+            let new_volume = ((mouse_x - track_left) / track_w).clamp(0.0, 1.0);
+            this.dragging_slider = Some(node_id);
+            if let Some(g) = _cx.try_global::<MixerGlobal>() {
+                let _ = g.cmd_tx.send(EngineCommand::SetVolume {
+                    node_id,
+                    volume: new_volume,
+                    pulse_id: g.state.lock().unwrap().nodes.get(&node_id).and_then(|n| n.pulse_id),
+                    node_name: node_name.clone(),
+                    is_stream,
+                });
+            }
+        }))
+        .on_mouse_up(MouseButton::Left, cx.listener(move |this, _, _, _cx| {
+            if this.dragging_slider == Some(node_id) {
+                this.dragging_slider = None;
+            }
+        }))
+        .on_mouse_up_out(MouseButton::Left, cx.listener(move |this, _, _, _cx| {
+            if this.dragging_slider == Some(node_id) {
+                this.dragging_slider = None;
+            }
+        }));
 
     let pct_label = div()
         .w(px(40.))
@@ -992,42 +1023,15 @@ fn volume_slider(
         .text_color(rgb(TEXT_SECONDARY))
         .child(format!("{vol_pct}%"));
 
-    let dec_btn = step_button("−", move |_, _, cx: &mut App| {
-        let (v, pid) = cx.try_global::<MixerGlobal>()
-            .and_then(|g| g.state.lock().unwrap().nodes.get(&node_id)
-                .map(|n| ((n.volume - 0.05).max(0.0), n.pulse_id)))
-            .unwrap_or((0.0, None));
-        if let Some(g) = cx.try_global::<MixerGlobal>() {
-            let _ = g.cmd_tx.send(EngineCommand::SetVolume {
-                node_id, volume: v,
-                pulse_id: pid, node_name: nn1.clone(), is_stream,
-            });
-        }
-    });
-
-    let inc_btn = step_button("+", move |_, _, cx: &mut App| {
-        let (v, pid) = cx.try_global::<MixerGlobal>()
-            .and_then(|g| g.state.lock().unwrap().nodes.get(&node_id)
-                .map(|n| ((n.volume + 0.05).min(1.0), n.pulse_id)))
-            .unwrap_or((1.0, None));
-        if let Some(g) = cx.try_global::<MixerGlobal>() {
-            let _ = g.cmd_tx.send(EngineCommand::SetVolume {
-                node_id, volume: v,
-                pulse_id: pid, node_name: nn2.clone(), is_stream,
-            });
-        }
-    });
-
     div()
         .flex_1()
         .flex().items_center().gap(px(10.))
         .child(mute_btn)
         .child(slider_track)
         .child(pct_label)
-        .child(dec_btn)
-        .child(inc_btn)
 }
 
+#[allow(dead_code)]
 fn step_button(
     label: &str,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,

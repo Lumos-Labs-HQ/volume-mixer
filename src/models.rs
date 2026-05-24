@@ -185,6 +185,7 @@ impl MixerState {
     /// Find the input device node ID linked to a given capture (AppInput) node.
     /// In PipeWire, capture links go: InputDevice (output) -> AppInput (input).
     /// So we look for links where input_node == capture_id and return output_node.
+    #[allow(dead_code)]
     pub fn capture_input_device(&self, capture_id: u32) -> Option<u32> {
         self.links.values()
             .find(|l| l.input_node == capture_id)

@@ -80,6 +80,7 @@ pub fn ico_x(size: f32, color: u32) -> Div {
     div().child(svg().path("icons/x.svg").size(px(size)).text_color(rgb(color)))
 }
 
+#[allow(dead_code)]
 pub fn ico_chevron_down(size: f32, color: u32) -> Div {
     div().child(svg().path("icons/chevrondown.svg").size(px(size)).text_color(rgb(color)))
 }
