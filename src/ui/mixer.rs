@@ -139,6 +139,9 @@ impl Render for MixerWindow {
                 let mut id: Vec<u32> = s.input_devices().iter().map(|n| n.id).collect();
                 let mut od: Vec<u32> = s.output_devices().iter().map(|n| n.id).collect();
                 pb.sort(); ai.sort(); id.sort(); od.sort();
+                // Deduplicate stream nodes by display name — keep highest pulse_id per name
+                pb = dedup_by_name(&pb, &s.nodes);
+                ai = dedup_by_name(&ai, &s.nodes);
                 let ol: Vec<(u32, String)> = s.output_devices()
                     .iter().map(|n| (n.id, clip(&n.description, 24))).collect();
                 let on: std::collections::HashMap<u32, String> = s.output_devices()
@@ -775,4 +778,29 @@ fn step_button(
 
 fn clip(s: &str, max: usize) -> String {
     if s.chars().count() > max { s.chars().take(max).collect::<String>() + "…" } else { s.to_string() }
+}
+
+/// For stream nodes (apps), deduplicate by display name (description).
+/// When multiple nodes share the same name (e.g. Discord spawns extra streams),
+/// keep only the one with the highest pulse_id (most recently active).
+fn dedup_by_name(
+    ids: &[u32],
+    nodes: &std::collections::HashMap<u32, crate::models::AudioNode>,
+) -> Vec<u32> {
+    let mut seen: std::collections::HashMap<String, u32> = Default::default();
+    for &id in ids {
+        if let Some(n) = nodes.get(&id) {
+            let key = n.description.clone();
+            let entry = seen.entry(key).or_insert(id);
+            // prefer the node with higher pulse_id (more recent stream)
+            let cur_pid = nodes.get(entry).and_then(|n| n.pulse_id).unwrap_or(0);
+            let new_pid = n.pulse_id.unwrap_or(0);
+            if new_pid > cur_pid {
+                *entry = id;
+            }
+        }
+    }
+    let mut result: Vec<u32> = seen.into_values().collect();
+    result.sort();
+    result
 }
