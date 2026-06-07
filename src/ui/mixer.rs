@@ -182,8 +182,9 @@ impl Render for MixerWindow {
         let (app_groups, out_devices, in_devices, empty) = if let Some(g) = cx.try_global::<MixerGlobal>() {
             let s = g.state.lock().unwrap();
             let apps = s.app_groups();
-            let outs: Vec<(u32, String, String)> = s.output_devices()
-                .iter().map(|n| (n.id, n.description.clone(), n.name.clone())).collect();
+            // Use output_targets() to get per-port entries (Speakers vs Headphones)
+            let outs: Vec<(u32, String, String, Option<String>)> = s.output_targets()
+                .into_iter().map(|t| (t.id, t.display_name, t.node_name, t.port_name)).collect();
             let ins: Vec<(u32, String, String)> = s.input_devices()
                 .iter().map(|n| (n.id, n.description.clone(), n.name.clone())).collect();
             let e = apps.is_empty() && outs.is_empty() && ins.is_empty();
@@ -231,7 +232,7 @@ impl Render for MixerWindow {
         }
 
         let mut out_rows: Vec<gpui::Div> = vec![];
-        for (id, desc, name) in &out_devices {
+        for (id, desc, name, _) in &out_devices {
             out_rows.push(render_device_row(*id, desc.clone(), name.clone(), "output", cx));
         }
 
@@ -451,7 +452,7 @@ fn render_applications_section(cards: Vec<gpui::Div>) -> gpui::Div {
 
 fn render_app_card(
     group: &AppGroup,
-    output_devices: &[(u32, String, String)],
+    output_devices: &[(u32, String, String, Option<String>)],
     open_out_popover: Option<u32>,
     cx: &mut Context<MixerWindow>,
 ) -> gpui::Div {
@@ -462,7 +463,15 @@ fn render_app_card(
         if let Some(pid) = group.playback_id {
             s.playback_output_devices(pid)
                 .into_iter()
-                .filter_map(|id| s.nodes.get(&id).map(|n| (id, n.description.clone())))
+                .filter_map(|id| {
+                    // Find matching output_target display name (may include port label)
+                    let node_name = s.nodes.get(&id).map(|n| n.name.clone())?;
+                    let display = output_devices.iter()
+                        .find(|(oid, _, name, _)| *oid == id || name == &node_name)
+                        .map(|(_, desc, _, _)| desc.clone())
+                        .or_else(|| s.nodes.get(&id).map(|n| n.description.clone()))?;
+                    Some((id, display))
+                })
                 .collect()
         } else {
             vec![]
@@ -534,17 +543,17 @@ fn render_app_card(
 
 fn render_output_routing(
     group: &AppGroup,
-    output_devices: &[(u32, String, String)],
+    output_devices: &[(u32, String, String, Option<String>)],
     linked_outputs: &[(u32, String)],
     open_popover: Option<u32>,
     cx: &mut Context<MixerWindow>,
 ) -> gpui::Div {
-    let group_name = group.node_name.clone(); // raw pw node.name for pw-link
+    let group_name = group.node_name.clone();
     let group_id = group.playback_id.unwrap_or(0);
     let is_open = open_popover == Some(group_id);
 
-    let available: Vec<(u32, String, String)> = output_devices.iter()
-        .filter(|(id, _, _)| !linked_outputs.iter().any(|(lid, _)| *lid == *id))
+    let available: Vec<(u32, String, String, Option<String>)> = output_devices.iter()
+        .filter(|(id, _, _, _)| !linked_outputs.iter().any(|(lid, _)| *lid == *id))
         .cloned()
         .collect();
 
@@ -553,8 +562,8 @@ fn render_output_routing(
     for (out_id, out_desc) in linked_outputs {
         let from_name = group_name.clone();
         let to_name = output_devices.iter()
-            .find(|(id, _, _)| *id == *out_id)
-            .map(|(_, _, name)| name.clone())
+            .find(|(id, _, _, _)| *id == *out_id)
+            .map(|(_, _, name, _)| name.clone())
             .unwrap_or_default();
         let desc = out_desc.clone();
         let device_type = infer_device_type(&desc);
@@ -628,9 +637,10 @@ fn render_output_routing(
             .w_full()
             .flex().flex_col().gap(px(2.));
 
-        for (out_id, out_desc, out_name) in available {
+        for (out_id, out_desc, out_name, port_name) in available {
             let from_name = group_name.clone();
             let to_name = out_name.clone();
+            let port = port_name.clone();
             let desc = out_desc.clone();
             let device_type = infer_device_type(&desc);
             let item = div()
@@ -648,6 +658,13 @@ fn render_output_routing(
                 .id(SharedString::from(format!("out-item-{group_id}-{out_id}")))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(g) = cx.try_global::<MixerGlobal>() {
+                        // Switch port first if needed (e.g. Speakers vs Headphones)
+                        if let Some(ref p) = port {
+                            let _ = g.cmd_tx.send(EngineCommand::SetSinkPort {
+                                sink_name: to_name.clone(),
+                                port_name: p.clone(),
+                            });
+                        }
                         let _ = g.cmd_tx.send(EngineCommand::CreateLink {
                             from_name: from_name.clone(),
                             to_name: to_name.clone(),

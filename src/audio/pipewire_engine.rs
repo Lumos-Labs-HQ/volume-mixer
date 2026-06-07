@@ -298,6 +298,11 @@ fn run_command_thread(cmd_rx: Receiver<EngineCommand>, event_tx: Sender<EngineEv
             EngineCommand::RemoveLink { from_name, to_name } => {
                 link_nodes(&from_name, &to_name, true);
             }
+            EngineCommand::SetSinkPort { sink_name, port_name } => {
+                let _ = Command::new("pactl")
+                    .args(["set-sink-port", &sink_name, &port_name])
+                    .output();
+            }
             EngineCommand::RestoreLinks { pairs } => {
                 for (from_name, to_name) in pairs {
                     link_nodes(&from_name, &to_name, false);

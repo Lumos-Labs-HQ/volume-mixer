@@ -75,7 +75,49 @@ pub enum AppIcon {
     Speaker,
 }
 
+/// A routing target — either a whole sink node or a specific port on a sink.
+#[derive(Debug, Clone)]
+pub struct OutputTarget {
+    pub id: u32,           // node id (for link tracking)
+    pub display_name: String,
+    pub node_name: String, // pw node.name for pw-link
+    pub port_name: Option<String>, // if Some, switch to this port when routing
+}
+
 impl MixerState {
+    /// Build the full list of routing targets including per-port entries for multi-port sinks.
+    pub fn output_targets(&self) -> Vec<OutputTarget> {
+        let mut targets = Vec::new();
+        // Query pactl for sink ports
+        let port_map = query_sink_ports();
+
+        for node in self.output_devices() {
+            let ports = port_map.get(&node.name);
+            match ports {
+                Some(ports) if ports.len() > 1 => {
+                    // Expose each available port as a separate target
+                    for (port_id, port_label) in ports {
+                        targets.push(OutputTarget {
+                            id: node.id,
+                            display_name: format!("{} ({})", node.description, port_label),
+                            node_name: node.name.clone(),
+                            port_name: Some(port_id.clone()),
+                        });
+                    }
+                }
+                _ => {
+                    targets.push(OutputTarget {
+                        id: node.id,
+                        display_name: node.description.clone(),
+                        node_name: node.name.clone(),
+                        port_name: None,
+                    });
+                }
+            }
+        }
+        targets
+    }
+
     pub fn playback_apps(&self) -> Vec<&AudioNode> {
         self.nodes
             .values()
@@ -230,10 +272,58 @@ pub enum EngineCommand {
     SetMute   { node_id: u32, muted: bool, pulse_id: Option<u32>, node_name: String, is_stream: bool },
     CreateLink { from_name: String, to_name: String },
     RemoveLink { from_name: String, to_name: String },
+    /// Switch a sink to a specific port before/after routing
+    SetSinkPort { sink_name: String, port_name: String },
     /// Re-apply a list of (app_node_name, sink_node_name) links after a device reconnects
     RestoreLinks { pairs: Vec<(String, String)> },
     #[allow(dead_code)]
     LoadNullSink { name: String },
     #[allow(dead_code)]
     UnloadModule { module_id: u32 },
+}
+
+/// Query pactl for available output ports per sink.
+/// Returns: sink_name -> Vec<(port_id, port_label)> for ports that are available or unknown.
+pub fn query_sink_ports() -> std::collections::HashMap<String, Vec<(String, String)>> {
+    let mut result = std::collections::HashMap::new();
+    let out = match std::process::Command::new("pactl").args(["list", "sinks"]).output() {
+        Ok(o) => o,
+        Err(_) => return result,
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut current_sink: Option<String> = None;
+    let mut ports: Vec<(String, String)> = vec![];
+
+    for line in text.lines() {
+        // Sink name lines: "\tName: sink_name"
+        if let Some(rest) = line.strip_prefix("\tName: ") {
+            if let Some(sink) = current_sink.take() {
+                if !ports.is_empty() { result.insert(sink, std::mem::take(&mut ports)); }
+            }
+            current_sink = Some(rest.trim().to_string());
+            ports.clear();
+        }
+        // Port lines are indented with two tabs and match: "port-id: Label (... available/unknown)"
+        // e.g. "\t\tanalog-output-speaker: Speakers (type: Speaker, ..., not available)"
+        else if current_sink.is_some() {
+            if let Some(rest) = line.strip_prefix("\t\t") {
+                // Port IDs only contain lowercase letters, digits, and hyphens
+                if let Some(colon) = rest.find(": ") {
+                    let port_id = &rest[..colon];
+                    if port_id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+                        let after = &rest[colon+2..];
+                        let label = after.split('(').next().unwrap_or("").trim();
+                        let unavailable = after.contains("not available");
+                        if !label.is_empty() && !unavailable {
+                            ports.push((port_id.to_string(), label.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(sink) = current_sink {
+        if !ports.is_empty() { result.insert(sink, ports); }
+    }
+    result
 }
