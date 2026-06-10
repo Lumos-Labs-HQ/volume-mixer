@@ -1,4 +1,4 @@
-# KernelPilot
+# MusicMixer
 
 A PipeWire audio mixer with a native desktop GUI built in Rust using [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui).
 
